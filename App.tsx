@@ -6,6 +6,7 @@ import { Logs } from './pages/Logs';
 import { PhoneNumbers } from './pages/PhoneNumbers';
 import { Files } from './pages/Files';
 import { Tools } from './pages/Tools';
+import { Settings } from './pages/Settings';
 import { MasterOverview } from './pages/MasterOverview';
 import { Login } from './pages/Login';
 import { ViewState, Organization, Assistant } from './types';
@@ -265,36 +266,34 @@ export default function App() {
   };
 
   const handleTransferAssistant = async (assistant: Assistant, targetOrgId: string) => {
+    // We update the assistant in MasterOverview before calling this to handle renaming, 
+    // but we need to update local state here.
     setAssistants(prev => prev.map(a => 
         a.id === assistant.id 
-        ? { ...a, orgId: targetOrgId } 
+        ? { ...assistant, orgId: targetOrgId } 
         : a
     ));
     await supabaseService.saveAssistantMapping(assistant.id, targetOrgId);
   };
 
   const handleBackToMaster = () => {
-    // If admin (check list or session), go back to master list
-    // Re-verify logic: If selectedOrg is set, we are in Dashboard view.
-    // If we clear it, we go to Master view (if allowed).
     setSelectedOrg(null);
   };
 
   // --- RENDER ---
 
-  // 1. Loading Screen
+  // 1. Loading Screen - FIXED CENTER POSITIONING
   if (isAuthLoading || (session && isLoadingOrgs)) {
       return (
           <div className="min-h-screen bg-vapi-bg flex items-center justify-center font-sans">
-              <div className="flex flex-col items-center gap-4 animate-fade-in">
-                 <div className="relative">
-                     <div className="w-12 h-12 rounded-xl bg-indigo-600/20 flex items-center justify-center animate-pulse"></div>
-                     <Loader2 className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-indigo-500 animate-spin" size={24} />
+              <div className="flex flex-col items-center justify-center gap-6 animate-fade-in">
+                 <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500/20 to-purple-500/20 flex items-center justify-center border border-indigo-500/30 shadow-[0_0_40px_-10px_rgba(99,102,241,0.3)]">
+                     <Loader2 className="text-indigo-400 animate-spin" size={32} />
                  </div>
-                 <div className="text-center">
-                    <h2 className="text-white font-semibold text-lg">Vapi Dashboard</h2>
-                    <p className="text-zinc-500 text-sm mt-1">
-                        {isAuthLoading ? 'Authenticating...' : 'Loading your organization...'}
+                 <div className="text-center space-y-2">
+                    <h2 className="text-white font-bold text-xl tracking-tight">Vapi Dashboard</h2>
+                    <p className="text-zinc-500 text-sm font-medium animate-pulse">
+                        {isAuthLoading ? 'Authenticating...' : 'Loading organization...'}
                     </p>
                  </div>
               </div>
@@ -351,6 +350,15 @@ export default function App() {
                   case 'phone-numbers': return <PhoneNumbers />;
                   case 'files': return <Files orgId={selectedOrg.id} />;
                   case 'tools': return <Tools orgId={selectedOrg.id} />;
+                  case 'settings': 
+                    return (
+                        <Settings 
+                            org={selectedOrg} 
+                            onUpdateOrg={handleUpdateOrg}
+                            assistants={assistants}
+                            setAssistants={setAssistants}
+                        />
+                    );
                   default: return <Overview />;
                 }
               })()}

@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import { Organization, Assistant } from '../types';
-import { Building2, Plus, ArrowRight, DollarSign, Users, Activity, CreditCard, X, Link, Check, ClipboardCopy, Mail, Bot, Search, ArrowRightLeft, Shield, User, Lock, Edit, Trash2, ChevronLeft, ChevronRight, AlertTriangle } from 'lucide-react';
-import { generateSecureToken } from '../services/vapiService';
+import { Building2, Plus, ArrowRight, DollarSign, Users, Activity, CreditCard, X, Link, Check, ClipboardCopy, Mail, Bot, Search, ArrowRightLeft, Shield, User, Lock, Edit, Trash2, ChevronLeft, ChevronRight, AlertTriangle, Loader2 } from 'lucide-react';
+import { generateSecureToken, updateVapiAssistant } from '../services/vapiService';
 import { supabaseService } from '../services/supabaseClient';
+import { useToast } from '../components/ToastProvider';
+import { VAPI_PRIVATE_KEY } from '../constants';
 
 interface MasterOverviewProps {
   organizations: Organization[];
@@ -23,6 +25,7 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
     onDeleteOrg,
     onTransferAssistant 
 }) => {
+  const { showToast } = useToast();
   const [selectedOrgForCredit, setSelectedOrgForCredit] = useState<Organization | null>(null);
   const [creditAmount, setCreditAmount] = useState('');
   
@@ -52,10 +55,10 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
   const [botSearch, setBotSearch] = useState('');
   const [botToTransfer, setBotToTransfer] = useState<Assistant | null>(null);
   const [targetOrgId, setTargetOrgId] = useState('');
+  const [isTransferring, setIsTransferring] = useState(false);
 
   // Copy Link State
   const [copiedOrgId, setCopiedOrgId] = useState<string | null>(null);
-  const [lastCopiedUrl, setLastCopiedUrl] = useState<string | null>(null);
 
   const totalUsage = organizations.reduce((acc, org) => acc + org.usageCost, 0);
   const totalCredits = organizations.reduce((acc, org) => acc + org.credits, 0);
@@ -96,6 +99,7 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
     // Sync to Supabase
     await supabaseService.updateOrganization(updatedOrg);
 
+    showToast(`Added $${amount} credits to ${selectedOrgForCredit.name}`, 'success');
     setSelectedOrgForCredit(null);
     setCreditAmount('');
   };
@@ -131,10 +135,11 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
         setNewOrgEmail('');
         setNewOrgPassword('');
         setNewOrgPlan('trial');
+        showToast('Organization created successfully!', 'success');
     } catch (err: any) {
         console.error("Create Org Error:", err);
         const msg = err instanceof Error ? err.message : JSON.stringify(err);
-        alert(`Failed to save organization to database: ${msg}`);
+        showToast(`Failed to create organization: ${msg}`, 'error');
     } finally {
         setIsCreating(false);
     }
@@ -148,9 +153,10 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
         await supabaseService.updateOrganization(editingOrg);
         onUpdateOrg(editingOrg);
         setEditingOrg(null);
+        showToast('Organization updated successfully', 'success');
     } catch (err: any) {
         console.error("Failed to update org:", err);
-        alert("Failed to update organization. Please check database permissions.");
+        showToast("Failed to update organization.", 'error');
     }
   };
 
@@ -168,19 +174,53 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
       await onDeleteOrg(orgToDelete.id);
       setOrgToDelete(null);
       setDeleteConfirmation('');
+      showToast('Organization deleted successfully', 'success');
     } catch (error) {
-      alert("Failed to delete organization");
+      showToast("Failed to delete organization", 'error');
     } finally {
       setIsDeleting(false);
     }
   };
 
-  const handleTransferSubmit = (e: React.FormEvent) => {
+  const getOrgName = (id: string) => organizations.find(o => o.id === id)?.name || 'Unknown Org';
+
+  const handleTransferSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (botToTransfer && targetOrgId) {
-        onTransferAssistant(botToTransfer, targetOrgId);
+    if (!botToTransfer || !targetOrgId) return;
+
+    setIsTransferring(true);
+    try {
+        const currentOrgName = getOrgName(botToTransfer.orgId);
+        const targetOrgName = getOrgName(targetOrgId);
+        
+        // Logic to rename the bot
+        let newBotName = botToTransfer.name;
+        const oldSuffix = ` - ${currentOrgName}`;
+        const newSuffix = ` - ${targetOrgName}`;
+
+        if (newBotName.endsWith(oldSuffix)) {
+            newBotName = newBotName.slice(0, -oldSuffix.length) + newSuffix;
+        } else {
+            newBotName = newBotName + newSuffix;
+        }
+
+        // 1. Update Name in Vapi
+        const updatedBot = await updateVapiAssistant(VAPI_PRIVATE_KEY, {
+            ...botToTransfer,
+            name: newBotName
+        });
+
+        // 2. Perform Transfer (Update Mapping)
+        onTransferAssistant(updatedBot, targetOrgId);
+
+        showToast(`Transferred and renamed to "${updatedBot.name}" successfully`, 'success');
         setBotToTransfer(null);
         setTargetOrgId('');
+    } catch (error) {
+        console.error("Transfer failed", error);
+        showToast("Failed to transfer assistant", 'error');
+    } finally {
+        setIsTransferring(false);
     }
   };
 
@@ -191,14 +231,12 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
     
     navigator.clipboard.writeText(url);
     setCopiedOrgId(org.id);
-    setLastCopiedUrl(url);
+    showToast('Secure Magic Link copied to clipboard!', 'info');
     setTimeout(() => {
         setCopiedOrgId(null);
-        setLastCopiedUrl(null);
     }, 3000);
   };
 
-  const getOrgName = (id: string) => organizations.find(o => o.id === id)?.name || 'Unknown Org';
 
   const filteredBots = assistants.filter(a => 
     a.name.toLowerCase().includes(botSearch.toLowerCase()) || 
@@ -410,22 +448,6 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
           </div>
         </div>
       </div>
-
-      {/* Copy Notification Toast */}
-      {lastCopiedUrl && (
-          <div className="fixed bottom-6 right-6 bg-zinc-800 border border-zinc-700 rounded-lg p-4 shadow-2xl flex items-start gap-3 animate-in slide-in-from-bottom-5 fade-in duration-300 z-50 max-w-sm">
-              <div className="bg-emerald-500/10 p-2 rounded-full">
-                  <ClipboardCopy className="text-emerald-400" size={20} />
-              </div>
-              <div className="overflow-hidden">
-                  <p className="text-white font-medium text-sm">Secure Login Link Copied!</p>
-                  <p className="text-zinc-400 text-xs mt-1 truncate font-mono">{lastCopiedUrl}</p>
-              </div>
-              <button onClick={() => setLastCopiedUrl(null)} className="text-zinc-500 hover:text-white">
-                  <X size={16} />
-              </button>
-          </div>
-      )}
 
       {/* Delete Organization Modal */}
       {orgToDelete && (
@@ -789,9 +811,10 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
                 </button>
                 <button 
                   onClick={handleTransferSubmit}
-                  disabled={!targetOrgId}
-                  className="px-4 py-2 bg-vapi-accent hover:bg-teal-300 text-black rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={!targetOrgId || isTransferring}
+                  className="px-4 py-2 bg-vapi-accent hover:bg-teal-300 text-black rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                 >
+                  {isTransferring ? <Loader2 size={16} className="animate-spin" /> : null}
                   Confirm Transfer
                 </button>
               </div>

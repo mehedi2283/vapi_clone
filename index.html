@@ -19,11 +19,25 @@
             },
             colors: {
               vapi: {
-                bg: '#09090b', // zinc-950
-                card: '#18181b', // zinc-900
-                border: '#27272a', // zinc-800
-                accent: '#2dd4bf', // teal-400
-                hover: '#3f3f46', // zinc-700
+                bg: '#050505', // Deep black
+                card: '#0a0a0a', // Slightly lighter black
+                border: '#1f1f22', // Subtle border
+                accent: '#2dd4bf', // Teal
+                hover: '#27272a',
+              }
+            },
+            animation: {
+              'fade-in': 'fadeIn 0.3s ease-out',
+              'scale-up': 'scaleUp 0.3s ease-out',
+            },
+            keyframes: {
+              fadeIn: {
+                '0%': { opacity: '0' },
+                '100%': { opacity: '1' },
+              },
+              scaleUp: {
+                '0%': { transform: 'scale(0.95)', opacity: '0' },
+                '100%': { transform: 'scale(1)', opacity: '1' },
               }
             }
           }
@@ -32,20 +46,24 @@
     </script>
     <style>
       body {
-        background-color: #09090b;
+        background-color: #050505;
         color: #f4f4f5;
+        background-image: 
+          radial-gradient(circle at 50% 0%, rgba(45, 212, 191, 0.03) 0%, transparent 50%),
+          radial-gradient(circle at 0% 0%, rgba(99, 102, 241, 0.02) 0%, transparent 50%);
+        background-attachment: fixed;
       }
       /* Custom scrollbar for dark theme */
       ::-webkit-scrollbar {
-        width: 8px;
-        height: 8px;
+        width: 6px;
+        height: 6px;
       }
       ::-webkit-scrollbar-track {
-        background: #09090b; 
+        background: transparent; 
       }
       ::-webkit-scrollbar-thumb {
         background: #27272a; 
-        border-radius: 4px;
+        border-radius: 3px;
       }
       ::-webkit-scrollbar-thumb:hover {
         background: #3f3f46; 

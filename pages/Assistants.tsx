@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Assistant, ChatMessage } from '../types';
-import { Plus, Search, MoreHorizontal, MessageSquare, Save, Play, Terminal, Sparkles, X, ChevronLeft, Volume2, Loader2, Key, Trash2, AlertTriangle, Edit, Trash, Cpu, Mic } from 'lucide-react';
+import { Plus, Search, MoreHorizontal, MessageSquare, Save, Play, Terminal, Sparkles, X, ChevronLeft, Volume2, Loader2, Key, Trash2, AlertTriangle, Edit, Trash, Cpu, Mic, Radio } from 'lucide-react';
 import { generateSystemPrompt, chatWithAssistant, generateSpeech } from '../services/geminiService';
 import { createVapiAssistant, updateVapiAssistant, deleteVapiAssistant } from '../services/vapiService';
+import { supabaseService } from '../services/supabaseClient';
 import { VAPI_PRIVATE_KEY } from '../constants';
+import { useToast } from '../components/ToastProvider';
 
 // Voices from the screenshot
 const ELEVEN_LABS_VOICES = [
@@ -19,6 +21,7 @@ interface AssistantsProps {
 }
 
 export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistants, selectedOrgId, selectedOrgName }) => {
+  const { showToast } = useToast();
   // Filter assistants for the current organization
   const filteredAssistants = assistants.filter(a => a.orgId === selectedOrgId);
   
@@ -59,7 +62,7 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
   const handleCreate = () => {
     const newAsst: Assistant = {
       id: `asst_draft_${Date.now()}`,
-      orgId: selectedOrgId, // Assign to current organization
+      orgId: selectedOrgId, // Assign to current organization context immediately
       name: 'New Assistant',
       model: {
         provider: 'openai',
@@ -67,16 +70,15 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
         systemPrompt: '',
         temperature: 0.7
       },
-      // Default to 'sarah' as requested
       voice: { provider: '11labs', voiceId: 'sarah' }, 
       transcriber: { provider: 'deepgram', language: 'en' },
       createdAt: new Date().toISOString()
     };
     
-    // Add to global list
-    setAssistants(prev => [newAsst, ...prev]);
-    // Select immediately
-    handleSelect(newAsst);
+    // Select immediately for editing
+    setSelectedAssistant(newAsst);
+    setEditedAssistant(newAsst);
+    setHasUnsavedChanges(true); // Enable Publish button for new drafts
   };
 
   const handleBack = () => {
@@ -85,9 +87,7 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
   };
 
   const getEffectiveApiKey = () => {
-    // If the user has manually entered a key via the modal (e.g. after a 401), use it.
     if (userApiKey) return userApiKey;
-    // Otherwise use the global constant.
     return VAPI_PRIVATE_KEY;
   };
 
@@ -96,52 +96,41 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
     setIsSaving(true);
 
     try {
-      // Check if it's a new draft
       if (editedAssistant.id.startsWith('asst_draft_')) {
-        // Enforce Org Name Suffix for new assistants
         let assistantToSave = { ...editedAssistant };
         const suffix = ` - ${selectedOrgName}`;
         if (!assistantToSave.name.endsWith(suffix)) {
              assistantToSave.name = `${assistantToSave.name}${suffix}`;
         }
 
-        // Create new assistant via API
         const createdAssistant = await createVapiAssistant(apiKeyToUse, assistantToSave);
         
         if (createdAssistant) {
-          // IMPORTANT: Override the returned orgId to match the current view's context
-          const assistanWithContext = {
-            ...createdAssistant,
-            orgId: selectedOrgId 
-          };
-
-          setAssistants(prev => prev.map(a => a.id === editedAssistant.id ? assistanWithContext : a));
+          await supabaseService.saveAssistantMapping(createdAssistant.id, selectedOrgId);
+          const assistanWithContext = { ...createdAssistant, orgId: selectedOrgId };
+          setAssistants(prev => [assistanWithContext, ...prev]);
           setSelectedAssistant(assistanWithContext);
           setEditedAssistant(assistanWithContext);
-          alert(`Assistant "${createdAssistant.name}" created successfully in Vapi!`);
+          showToast(`Assistant "${createdAssistant.name}" created successfully!`, 'success');
         }
       } else {
-        // Update existing assistant
         const updatedAssistant = await updateVapiAssistant(apiKeyToUse, editedAssistant);
-        
-        const assistanWithContext = {
-            ...updatedAssistant,
-            orgId: selectedOrgId 
-        };
-
+        await supabaseService.saveAssistantMapping(updatedAssistant.id, selectedOrgId);
+        const assistanWithContext = { ...updatedAssistant, orgId: selectedOrgId };
         setAssistants(prev => prev.map(a => a.id === editedAssistant.id ? assistanWithContext : a));
         setSelectedAssistant(assistanWithContext);
         setEditedAssistant(assistanWithContext);
-        alert(`Assistant "${updatedAssistant.name}" updated successfully!`);
+        showToast(`Assistant "${updatedAssistant.name}" updated successfully!`, 'success');
       }
-      
       setHasUnsavedChanges(false);
       setShowApiKeyModal(false);
     } catch (error: any) {
       console.error("Failed to save assistant", error);
-      alert(`Failed to save to Vapi: ${error.message}`);
       if (error.message.includes('401') || error.message.toLowerCase().includes('unauthorized')) {
         setShowApiKeyModal(true);
+        showToast("Authentication failed. Please verify API key.", "error");
+      } else {
+        showToast(`Failed to save to Vapi: ${error.message}`, "error");
       }
     } finally {
       setIsSaving(false);
@@ -162,48 +151,29 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
         if (!isDraft && !isMock) {
              console.log("Deleting assistant from Vapi:", target.id);
              await deleteVapiAssistant(apiKeyToUse, target.id);
-        } else {
-             console.log("Skipping server delete for mock/draft assistant:", target.id);
         }
         
-        // Remove from local state
         setAssistants(prev => prev.filter(a => a.id !== target.id));
-        
-        // If we deleted the currently selected assistant, go back
         if (selectedAssistant?.id === target.id) {
             handleBack();
         }
 
         setAssistantToDelete(null);
-        
-        // Use a small timeout to let the UI update before alerting
-        setTimeout(() => alert('Assistant deleted successfully.'), 100);
-        
+        showToast('Assistant deleted successfully.', 'success');
         setShowApiKeyModal(false);
     } catch (error: any) {
-        // Auth errors: Stop and ask for key
         if (error.message.includes('401') || error.message.toLowerCase().includes('unauthorized')) {
-            console.error("Auth error during delete:", error);
             setShowApiKeyModal(true);
             setUserApiKey(''); 
+            showToast("Authentication failed. Please verify API key.", "error");
             return;
         }
-
-        // For other errors (404, 500, etc.), force local delete so user isn't stuck
-        console.warn("Server delete failed or not found, forcing local delete:", error.message);
-        
         setAssistants(prev => prev.filter(a => a.id !== target.id));
         if (selectedAssistant?.id === target.id) {
             handleBack();
         }
         setAssistantToDelete(null);
-        
-        const msg = error.message.includes('404') 
-            ? 'Assistant was deleted (it may have already been removed from the server).'
-            : `Note: Assistant removed locally, but server reported an error: ${error.message}`;
-        
-        setTimeout(() => alert(msg), 100);
-        
+        showToast('Assistant removed locally.', 'warning');
         setShowApiKeyModal(false);
     } finally {
         setIsSaving(false);
@@ -226,7 +196,6 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
       e.stopPropagation();
       e.preventDefault();
     }
-    
     setAssistantToDelete(assistant);
     setShowDeleteConfirm(true);
   };
@@ -267,8 +236,7 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
           isSaving={isSaving}
           orgName={selectedOrgName}
         />
-        
-        {/* Delete Confirmation Modal (Reusable for Editor) */}
+        {/* Modals are rendered here to reuse logic easily */}
         {showDeleteConfirm && assistantToDelete && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
              <div className="bg-vapi-card border border-vapi-border rounded-xl w-full max-w-sm shadow-2xl p-6 border-red-500/20">
@@ -299,174 +267,181 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
              </div>
           </div>
         )}
-
+      
         {/* API Key Modal */}
         {showApiKeyModal && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
-             <div className="bg-vapi-card border border-vapi-border rounded-xl w-full max-w-md shadow-2xl p-6">
-                <div className="flex items-center gap-2 mb-4 text-white">
-                  <Key className="text-vapi-accent" size={20} />
-                  <h3 className="text-lg font-bold">Enter Vapi Private Key</h3>
-                </div>
-                <p className="text-zinc-400 text-sm mb-4">
-                  {pendingAction === 'delete' 
-                    ? 'To delete this assistant from your Vapi account, please verify your Private API Key.'
-                    : 'To publish this assistant to your real Vapi account, please provide your Private API Key.'}
-                </p>
-                <input 
-                  type="password"
-                  value={userApiKey}
-                  onChange={(e) => setUserApiKey(e.target.value)}
-                  placeholder="vapi_private_..."
-                  className="w-full bg-black border border-zinc-700 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-vapi-accent mb-6 font-mono text-sm"
-                  autoFocus
-                />
-                <div className="flex justify-end gap-3">
-                  <button 
-                    onClick={() => {
-                        setShowApiKeyModal(false);
-                        setPendingAction(null);
-                    }}
-                    className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg font-medium transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button 
-                    onClick={handleModalConfirm}
-                    disabled={!userApiKey}
-                    className={`px-4 py-2 rounded-lg font-bold transition-colors disabled:opacity-50 ${pendingAction === 'delete' ? 'bg-red-500 hover:bg-red-400 text-white' : 'bg-vapi-accent hover:bg-teal-300 text-black'}`}
-                  >
-                    {pendingAction === 'delete' ? 'Confirm Delete' : 'Save & Publish'}
-                  </button>
-                </div>
-             </div>
-          </div>
-        )}
+           <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
+           <div className="bg-vapi-card border border-vapi-border rounded-xl w-full max-w-md shadow-2xl p-6">
+              <div className="flex items-center gap-2 mb-4 text-white">
+                <Key className="text-vapi-accent" size={20} />
+                <h3 className="text-lg font-bold">Enter Vapi Private Key</h3>
+              </div>
+              <p className="text-zinc-400 text-sm mb-4">
+                To {pendingAction === 'delete' ? 'delete' : 'save'} this assistant, please verify your Private API Key.
+              </p>
+              <input 
+                type="password"
+                value={userApiKey}
+                onChange={(e) => setUserApiKey(e.target.value)}
+                placeholder="vapi_private_..."
+                className="w-full bg-black border border-zinc-700 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-vapi-accent mb-6 font-mono text-sm"
+                autoFocus
+              />
+              <div className="flex justify-end gap-3">
+                <button 
+                  onClick={() => {
+                      setShowApiKeyModal(false);
+                      setPendingAction(null);
+                  }}
+                  className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg font-medium transition-colors"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={handleModalConfirm}
+                  disabled={!userApiKey}
+                  className={`px-4 py-2 rounded-lg font-bold transition-colors disabled:opacity-50 ${pendingAction === 'delete' ? 'bg-red-500 hover:bg-red-400 text-white' : 'bg-vapi-accent hover:bg-teal-300 text-black'}`}
+                >
+                  Confirm
+                </button>
+              </div>
+           </div>
+        </div>
+      )}
       </>
     );
   }
 
   // LIST VIEW
   return (
-    <div className="space-y-6 animate-fade-in">
+    <div className="space-y-8 animate-fade-in pb-20">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-white">Assistants</h1>
+        <div>
+            <h1 className="text-3xl font-bold text-white tracking-tight">Assistants</h1>
+            <p className="text-zinc-500 text-sm mt-1">Manage and configure your voice AI agents.</p>
+        </div>
         <button 
           onClick={handleCreate}
-          className="flex items-center gap-2 bg-vapi-accent hover:bg-teal-300 text-black px-4 py-2 rounded-lg font-medium transition-colors"
+          className="flex items-center gap-2 bg-white text-black hover:bg-zinc-200 px-5 py-2.5 rounded-xl font-semibold transition-all shadow-lg shadow-white/10"
         >
           <Plus size={18} />
-          <span>Create Assistant</span>
+          <span>Create New</span>
         </button>
       </div>
 
-      <div className="flex items-center gap-4 bg-vapi-card p-2 rounded-xl border border-vapi-border">
+      <div className="flex items-center gap-4 bg-zinc-900/30 p-2 rounded-xl border border-white/5 backdrop-blur-sm">
         <Search className="text-zinc-500 ml-2" size={20} />
         <input 
           type="text" 
-          placeholder="Search assistants..." 
-          className="bg-transparent border-none focus:outline-none text-white w-full placeholder-zinc-500"
+          placeholder="Search assistants by name or ID..." 
+          className="bg-transparent border-none focus:outline-none text-white w-full placeholder-zinc-500 text-sm"
         />
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 pb-20">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 gap-6">
         {filteredAssistants.length === 0 ? (
-          <div className="col-span-full py-12 flex flex-col items-center justify-center text-zinc-500">
+          <div className="col-span-full py-20 flex flex-col items-center justify-center text-zinc-500 border border-dashed border-zinc-800 rounded-2xl bg-zinc-900/20">
             <BotIcon />
-            <p className="mt-4 text-sm">No assistants found for this organization.</p>
+            <p className="mt-4 text-sm font-medium">No assistants found for this organization.</p>
             <button onClick={handleCreate} className="mt-2 text-vapi-accent hover:underline text-sm">Create your first one</button>
           </div>
         ) : (
           filteredAssistants.map(asst => (
             <div 
               key={asst.id} 
-              // Card Container: Minimalist, Flat, Dark
-              className="group relative bg-vapi-card border border-vapi-border hover:border-zinc-600 rounded-xl p-0 transition-all duration-200 cursor-default flex flex-col overflow-hidden shadow-sm hover:shadow-md"
+              className="group relative bg-zinc-900/40 border border-white/5 hover:border-white/10 rounded-2xl p-6 transition-all duration-300 hover:shadow-2xl hover:shadow-black/50 hover:-translate-y-1 backdrop-blur-md flex flex-col h-[260px]"
             >
-              <div className="p-5 flex-1">
-                {/* Header Row */}
-                <div className="flex justify-between items-start mb-6">
-                   <div className="flex gap-4">
-                      {/* Floating Accent Capsule - Cleaner than border */}
-                      <div className="w-1.5 h-10 bg-vapi-accent rounded-full shadow-[0_0_8px_rgba(45,212,191,0.4)]"></div>
-                      <div>
-                         <h3 className="font-bold text-white text-lg leading-tight truncate pr-2 max-w-[180px]">{asst.name}</h3>
-                         <div className="text-xs text-zinc-500 mt-1 font-mono flex items-center gap-2">
-                           <span>{asst.model.provider}</span>
-                           <span className="w-1 h-1 rounded-full bg-zinc-700"></span>
-                           <span>{asst.voice.provider}</span>
-                         </div>
-                      </div>
-                   </div>
-                   
-                   {/* Menu Button */}
-                   <div className="relative">
-                        <button 
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                setActiveDropdown(activeDropdown === asst.id ? null : asst.id);
-                            }}
-                            className={`text-zinc-500 hover:text-white p-1 rounded-md hover:bg-zinc-800 transition-colors cursor-pointer ${activeDropdown === asst.id ? 'bg-zinc-800 text-white' : ''}`}
-                        >
-                            <MoreHorizontal size={20} />
-                        </button>
-                        
-                        {activeDropdown === asst.id && (
-                            <div className="absolute right-0 top-full mt-1 w-48 bg-zinc-950 border border-zinc-800 rounded-xl shadow-2xl z-30 overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right">
-                                <button 
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleSelect(asst);
-                                        setActiveDropdown(null);
-                                    }}
-                                    className="w-full flex items-center gap-2 px-4 py-3 text-sm text-zinc-300 hover:bg-zinc-900 hover:text-white transition-colors text-left cursor-pointer"
-                                >
-                                    <Edit size={14} />
-                                    Edit Bot
-                                </button>
-                                <button 
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        setActiveDropdown(null);
-                                        handleDeleteClick(asst);
-                                    }}
-                                    className="w-full flex items-center gap-2 px-4 py-3 text-sm text-red-400 hover:bg-red-500/10 hover:text-red-300 transition-colors text-left border-t border-zinc-900 cursor-pointer"
-                                >
-                                    <Trash size={14} />
-                                    Delete Bot
-                                </button>
-                            </div>
-                        )}
-                   </div>
-                </div>
-
-                {/* Tech Stack Pills */}
-                <div className="flex gap-3 mb-2">
-                   <div className="flex-1 bg-black/40 border border-zinc-800 rounded-lg px-3 py-2.5 flex items-center gap-2 min-w-0">
-                      <Mic size={14} className="text-zinc-500 shrink-0"/>
-                      <span className="text-sm text-zinc-300 font-medium truncate">{asst.transcriber.provider}</span>
-                   </div>
-                   <div className="flex-1 bg-black/40 border border-zinc-800 rounded-lg px-3 py-2.5 flex items-center gap-2 min-w-0">
-                      <Cpu size={14} className="text-zinc-500 shrink-0"/>
-                      <span className="text-sm text-zinc-300 font-medium truncate">{asst.model.model}</span>
-                   </div>
-                </div>
+              {/* Header */}
+              <div className="flex justify-between items-start mb-6">
+                 <div className="flex flex-col gap-1 w-full pr-8">
+                    <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)] animate-pulse"></span>
+                        <h3 className="text-lg font-bold text-white truncate" title={asst.name}>{asst.name}</h3>
+                    </div>
+                    <span className="text-[10px] font-mono text-zinc-500 truncate">{asst.id}</span>
+                 </div>
+                 
+                 <div className="absolute right-4 top-4">
+                      <button 
+                          onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveDropdown(activeDropdown === asst.id ? null : asst.id);
+                          }}
+                          className={`p-2 rounded-lg text-zinc-500 hover:text-white hover:bg-white/5 transition-all ${activeDropdown === asst.id ? 'bg-white/10 text-white' : ''}`}
+                      >
+                          <MoreHorizontal size={20} />
+                      </button>
+                      
+                      {activeDropdown === asst.id && (
+                          <div className="absolute right-0 top-full mt-2 w-48 bg-[#0a0a0a] border border-zinc-800 rounded-xl shadow-2xl z-30 overflow-hidden animate-in fade-in zoom-in-95 duration-150 origin-top-right">
+                              <button 
+                                  onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleSelect(asst);
+                                      setActiveDropdown(null);
+                                  }}
+                                  className="w-full flex items-center gap-2 px-4 py-3 text-sm text-zinc-300 hover:bg-zinc-900 hover:text-white transition-colors text-left"
+                              >
+                                  <Edit size={14} />
+                                  Edit Configuration
+                              </button>
+                              <div className="h-px bg-zinc-900 my-0"></div>
+                              <button 
+                                  onClick={(e) => {
+                                      e.stopPropagation();
+                                      setActiveDropdown(null);
+                                      handleDeleteClick(asst);
+                                  }}
+                                  className="w-full flex items-center gap-2 px-4 py-3 text-sm text-red-400 hover:bg-red-500/10 hover:text-red-300 transition-colors text-left"
+                              >
+                                  <Trash size={14} />
+                                  Delete Assistant
+                              </button>
+                          </div>
+                      )}
+                 </div>
               </div>
 
-              {/* Footer Row */}
-              <div className="px-5 py-3 border-t border-zinc-800/50 bg-zinc-900/30 flex items-center justify-between">
-                 <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_5px_rgba(16,185,129,0.5)]"></div>
-                    <span className="text-[10px] font-bold text-zinc-500 tracking-wider uppercase">Active</span>
+              {/* Specs Grid */}
+              <div className="grid grid-cols-2 gap-3 mb-6">
+                 {/* Voice Spec */}
+                 <div className="bg-white/[0.03] border border-white/5 rounded-lg p-3 flex flex-col justify-center">
+                    <span className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1 flex items-center gap-1">
+                        <Radio size={10} /> Voice
+                    </span>
+                    <span className="text-sm text-zinc-200 font-medium truncate">{asst.voice.provider}</span>
                  </div>
-                 <span className="text-[10px] font-mono text-zinc-600 truncate max-w-[120px]">ID: {asst.id}</span>
+                 {/* Model Spec */}
+                 <div className="bg-white/[0.03] border border-white/5 rounded-lg p-3 flex flex-col justify-center">
+                    <span className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1 flex items-center gap-1">
+                        <Cpu size={10} /> Model
+                    </span>
+                    <span className="text-sm text-zinc-200 font-medium truncate">{asst.model.model}</span>
+                 </div>
+              </div>
+
+              {/* Footer Actions */}
+              <div className="flex items-center gap-3 mt-auto">
+                 <button 
+                    onClick={() => handleSelect(asst)}
+                    className="flex-1 bg-white text-black hover:bg-zinc-200 h-9 rounded-lg text-sm font-semibold transition-colors shadow-lg shadow-white/5"
+                 >
+                    Edit
+                 </button>
+                 <button 
+                    onClick={() => handleSelect(asst)} // In real app, maybe open a modal directly
+                    className="h-9 w-9 flex items-center justify-center rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white border border-zinc-700 transition-colors"
+                    title="Quick Test"
+                 >
+                    <Terminal size={16} />
+                 </button>
               </div>
             </div>
           ))
         )}
       </div>
-
-      {/* Re-render Delete Modal for List View context */}
+      
+      {/* Delete Confirmation Modal (List View Context) */}
       {showDeleteConfirm && assistantToDelete && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
              <div className="bg-vapi-card border border-vapi-border rounded-xl w-full max-w-sm shadow-2xl p-6 border-red-500/20">
@@ -498,7 +473,7 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
           </div>
         )}
       
-      {/* API Key Modal for List View Delete Context */}
+      {/* API Key Modal (List View Context) */}
       {showApiKeyModal && !editedAssistant && (
            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
            <div className="bg-vapi-card border border-vapi-border rounded-xl w-full max-w-md shadow-2xl p-6">
@@ -555,23 +530,18 @@ const AssistantEditor: React.FC<{
   isSaving: boolean;
   orgName: string;
 }> = ({ assistant, onChange, onBack, onSave, onDelete, hasChanges, isSaving, orgName }) => {
+  const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState<'model' | 'voice' | 'transcriber'>('model');
   const [promptGoal, setPromptGoal] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [isTestOpen, setIsTestOpen] = useState(true);
   const [voiceSearch, setVoiceSearch] = useState('');
-
-  // Voice Preview State
   const [previewText, setPreviewText] = useState("Hello! I am your AI assistant. How can I help you today?");
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
 
-  // Check if it's a draft (new assistant)
   const isDraft = assistant.id.startsWith('asst_draft_');
-
-  // Name Parsing Logic: Enforce Suffix
   const suffix = ` - ${orgName}`;
   const hasSuffix = assistant.name.endsWith(suffix);
-  
   const displayName = (hasSuffix) ? assistant.name.slice(0, -suffix.length) : assistant.name;
 
   const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -612,7 +582,7 @@ const AssistantEditor: React.FC<{
       await generateSpeech(previewText, geminiVoice);
     } catch (e) {
       console.error(e);
-      alert("Failed to generate speech preview.");
+      showToast("Failed to generate speech preview.", "error");
     } finally {
       setIsPreviewLoading(false);
     }
@@ -620,10 +590,9 @@ const AssistantEditor: React.FC<{
 
   return (
     <div className="h-[calc(100vh-2rem)] flex flex-col animate-fade-in">
-      {/* Editor Header */}
-      <div className="flex items-center justify-between mb-6 pb-4 border-b border-vapi-border">
+      <div className="flex items-center justify-between mb-6 pb-4 border-b border-white/5">
         <div className="flex items-center gap-4">
-          <button onClick={onBack} className="p-2 hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-white">
+          <button onClick={onBack} className="p-2 hover:bg-white/5 rounded-lg text-zinc-400 hover:text-white transition-colors">
             <ChevronLeft size={20} />
           </button>
           <div>
@@ -642,7 +611,7 @@ const AssistantEditor: React.FC<{
              </div>
              <div className="flex items-center gap-2 text-xs text-zinc-500 mt-1">
                <span className="font-mono">{assistant.id}</span>
-               <span className="w-1 h-1 rounded-full bg-zinc-600"></span>
+               <span className="w-1 h-1 rounded-full bg-emerald-500"></span>
                <span>{assistant.id.startsWith('asst_draft') ? 'Draft' : 'Active'}</span>
              </div>
           </div>
@@ -658,10 +627,10 @@ const AssistantEditor: React.FC<{
             {isSaving ? <Loader2 size={18} className="animate-spin" /> : <Trash2 size={18} />}
           </button>
 
-          <div className="h-8 w-[1px] bg-zinc-800 mx-1"></div>
+          <div className="h-8 w-[1px] bg-white/10 mx-1"></div>
           <button 
             type="button"
-            className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-zinc-300 hover:text-white bg-zinc-800 hover:bg-zinc-700 rounded-lg border border-zinc-700 transition-colors"
+            className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-zinc-300 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg border border-white/5 transition-colors"
             onClick={() => setIsTestOpen(!isTestOpen)}
           >
             {isTestOpen ? <X size={16}/> : <Terminal size={16} />}
@@ -679,11 +648,9 @@ const AssistantEditor: React.FC<{
         </div>
       </div>
 
-      {/* Editor Body */}
       <div className="flex-1 flex gap-6 overflow-hidden">
-        {/* Left Column: Configuration */}
         <div className={`flex-1 overflow-y-auto pr-2 ${isTestOpen ? 'max-w-[60%]' : 'max-w-full'}`}>
-          <div className="flex gap-1 bg-zinc-900/50 p-1 rounded-lg mb-6 w-fit border border-zinc-800">
+          <div className="flex gap-1 bg-zinc-900/50 p-1 rounded-lg mb-6 w-fit border border-white/10">
             {['model', 'voice', 'transcriber'].map((tab) => (
               <button
                 key={tab}
@@ -697,7 +664,7 @@ const AssistantEditor: React.FC<{
 
           {activeTab === 'model' && (
             <div className="space-y-6">
-              <div className="bg-vapi-card border border-vapi-border rounded-xl p-5">
+              <div className="bg-zinc-900/40 border border-white/5 rounded-xl p-5 backdrop-blur-sm">
                 <h3 className="text-sm font-medium text-zinc-300 mb-4">Model Configuration</h3>
                 <div className="grid grid-cols-2 gap-4 mb-4">
                   <div>
@@ -705,7 +672,7 @@ const AssistantEditor: React.FC<{
                     <select 
                       value={assistant.model.provider}
                       onChange={(e) => onChange({...assistant, model: {...assistant.model, provider: e.target.value}})}
-                      className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:border-vapi-accent outline-none"
+                      className="w-full bg-black/40 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:border-vapi-accent outline-none"
                     >
                       <option value="openai">OpenAI</option>
                       <option value="anthropic">Anthropic</option>
@@ -718,7 +685,7 @@ const AssistantEditor: React.FC<{
                     <select 
                       value={assistant.model.model}
                       onChange={(e) => onChange({...assistant, model: {...assistant.model, model: e.target.value}})}
-                      className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:border-vapi-accent outline-none"
+                      className="w-full bg-black/40 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:border-vapi-accent outline-none"
                     >
                       <option value="gpt-4">GPT-4</option>
                       <option value="gpt-4-turbo">GPT-4 Turbo</option>
@@ -736,12 +703,10 @@ const AssistantEditor: React.FC<{
                   <textarea 
                     value={assistant.model.systemPrompt}
                     onChange={(e) => onChange({...assistant, model: {...assistant.model, systemPrompt: e.target.value}})}
-                    className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-300 focus:border-vapi-accent outline-none font-mono min-h-[300px] resize-y"
+                    className="w-full bg-black/40 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-300 focus:border-vapi-accent outline-none font-mono min-h-[300px] resize-y"
                     placeholder="You are a helpful assistant..."
                   />
-                  
-                  {/* AI Generator for Prompt */}
-                  <div className="mt-4 p-4 bg-zinc-900/50 rounded-lg border border-zinc-800">
+                  <div className="mt-4 p-4 bg-black/40 rounded-lg border border-zinc-800">
                     <div className="flex items-center gap-2 mb-2 text-vapi-accent text-sm font-medium">
                       <Sparkles size={16} />
                       <span>Generate with Gemini</span>
@@ -770,7 +735,7 @@ const AssistantEditor: React.FC<{
 
           {activeTab === 'voice' && (
              <div className="space-y-6">
-               <div className="bg-vapi-card border border-vapi-border rounded-xl p-5">
+               <div className="bg-zinc-900/40 border border-white/5 rounded-xl p-5 backdrop-blur-sm">
                  <h3 className="text-sm font-medium text-zinc-300 mb-4">Voice Configuration</h3>
                  <div className="grid grid-cols-2 gap-4">
                    <div>
@@ -778,7 +743,7 @@ const AssistantEditor: React.FC<{
                      <select 
                        value={assistant.voice.provider}
                        onChange={(e) => onChange({...assistant, voice: {...assistant.voice, provider: e.target.value}})}
-                       className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:border-vapi-accent outline-none"
+                       className="w-full bg-black/40 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:border-vapi-accent outline-none"
                      >
                        <option value="11labs">11Labs</option>
                        <option value="playht">PlayHT</option>
@@ -793,13 +758,12 @@ const AssistantEditor: React.FC<{
                       <input 
                         value={assistant.voice.voiceId}
                         onChange={(e) => onChange({...assistant, voice: {...assistant.voice, voiceId: e.target.value}})}
-                        className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:border-vapi-accent outline-none font-mono"
+                        className="w-full bg-black/40 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:border-vapi-accent outline-none font-mono"
                         placeholder="e.g. 21m00Tcm4TlvDq8ikWAM"
                       />
                       <p className="text-[10px] text-zinc-500 mt-1.5 leading-relaxed">
                         This is the provider-specific ID that will be used. Ensure the Voice is present in your 11Labs Voice Library.
                       </p>
-
                       {assistant.voice.provider === '11labs' && (
                         <div className="mt-5 pt-4 border-t border-zinc-800">
                            <div className="flex items-center justify-between mb-3">
@@ -844,9 +808,7 @@ const AssistantEditor: React.FC<{
                       )}
                    </div>
                  </div>
-                 
-                 {/* Voice Preview Section */}
-                 <div className="mt-6 p-4 bg-zinc-900 rounded-lg border border-zinc-800">
+                 <div className="mt-6 p-4 bg-black/40 rounded-lg border border-zinc-800">
                     <h4 className="text-xs font-medium text-zinc-400 mb-3 flex items-center gap-2">
                        <Volume2 size={14} /> Voice Preview
                     </h4>
@@ -876,7 +838,7 @@ const AssistantEditor: React.FC<{
 
           {activeTab === 'transcriber' && (
             <div className="space-y-6">
-              <div className="bg-vapi-card border border-vapi-border rounded-xl p-5">
+              <div className="bg-zinc-900/40 border border-white/5 rounded-xl p-5 backdrop-blur-sm">
                 <h3 className="text-sm font-medium text-zinc-300 mb-4">Transcriber Settings</h3>
                  <div className="grid grid-cols-2 gap-4">
                    <div>
@@ -884,7 +846,7 @@ const AssistantEditor: React.FC<{
                      <select 
                        value={assistant.transcriber.provider}
                        onChange={(e) => onChange({...assistant, transcriber: {...assistant.transcriber, provider: e.target.value}})}
-                       className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:border-vapi-accent outline-none"
+                       className="w-full bg-black/40 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:border-vapi-accent outline-none"
                      >
                        <option value="deepgram">Deepgram</option>
                        <option value="talkscriber">Talkscriber</option>
@@ -895,7 +857,7 @@ const AssistantEditor: React.FC<{
                       <select 
                         value={assistant.transcriber.language}
                         onChange={(e) => onChange({...assistant, transcriber: {...assistant.transcriber, language: e.target.value}})}
-                        className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:border-vapi-accent outline-none"
+                        className="w-full bg-black/40 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:border-vapi-accent outline-none"
                       >
                         <option value="en">English</option>
                         <option value="es">Spanish</option>
@@ -909,10 +871,9 @@ const AssistantEditor: React.FC<{
           )}
         </div>
 
-        {/* Right Column: Playground */}
         {isTestOpen && (
-          <div className="w-[400px] border-l border-vapi-border bg-black/40 flex flex-col">
-            <div className="p-4 border-b border-vapi-border flex justify-between items-center bg-vapi-card">
+          <div className="w-[400px] border-l border-white/5 bg-black/40 backdrop-blur-md flex flex-col">
+            <div className="p-4 border-b border-white/5 flex justify-between items-center bg-zinc-900/50">
               <span className="text-sm font-medium text-white">Test Simulator</span>
               <div className="flex gap-2">
                 <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
@@ -970,7 +931,7 @@ const Playground: React.FC<{ systemPrompt: string }> = ({ systemPrompt }) => {
   };
 
   return (
-    <div className="flex flex-col h-full bg-zinc-900/50">
+    <div className="flex flex-col h-full bg-zinc-900/30">
       <div className="flex-1 overflow-y-auto p-4 space-y-4" ref={scrollRef}>
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-zinc-500 space-y-2">
@@ -993,7 +954,7 @@ const Playground: React.FC<{ systemPrompt: string }> = ({ systemPrompt }) => {
           </div>
         )}
       </div>
-      <div className="p-4 border-t border-vapi-border bg-vapi-card">
+      <div className="p-4 border-t border-white/5 bg-zinc-900/50">
         <div className="flex gap-2">
           <input 
             value={input}

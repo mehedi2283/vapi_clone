@@ -37,7 +37,7 @@ export interface MetricData {
   cost: number;
 }
 
-export type ViewState = 'overview' | 'assistants' | 'phone-numbers' | 'logs' | 'files' | 'tools';
+export type ViewState = 'overview' | 'assistants' | 'phone-numbers' | 'logs' | 'files' | 'tools' | 'settings';
 
 export interface ChatMessage {
   role: 'user' | 'model' | 'system';
