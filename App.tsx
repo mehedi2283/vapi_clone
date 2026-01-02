@@ -33,9 +33,18 @@ export default function App() {
   // 1. Check Auth Session on Mount & Listen for changes & Check Magic Link
   useEffect(() => {
     const checkSession = async () => {
-        // A. Check for Magic Link Token in URL
+        // A. Check for Magic Link Token in URL (Search or Hash)
         const params = new URLSearchParams(window.location.search);
-        const token = params.get('token');
+        let token = params.get('token');
+        
+        // Fallback: Check hash params just in case (e.g. #/?token=...)
+        if (!token && window.location.hash.includes('token=')) {
+            const hashParts = window.location.hash.split('?');
+            if (hashParts.length > 1) {
+                const hashParams = new URLSearchParams(hashParts[1]);
+                token = hashParams.get('token');
+            }
+        }
         
         if (token) {
             const decoded = parseSecureToken(token);
@@ -70,6 +79,7 @@ export default function App() {
                         const demoOrg = MOCK_ORGS.find(o => o.id === decoded.id) || { ...MOCK_ORGS[0], id: decoded.id, name: decoded.nm || 'Magic Org' };
                         setOrganizations([demoOrg]);
                         setSelectedOrg(demoOrg);
+                        window.history.replaceState({}, document.title, window.location.pathname);
                     }
                 } catch (e) {
                     console.error("Magic link load error", e);

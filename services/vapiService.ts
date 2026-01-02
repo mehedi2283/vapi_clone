@@ -263,7 +263,7 @@ const ENCRYPTION_KEY = "vapi_dashboard_secure_link_salt_2024_v1";
 // Generates an encrypted-looking token containing the orgId and Name
 export const generateSecureToken = (org: { id: string, name: string }): string => {
   try {
-    // We include the name 'nm' so the receiving client can reconstruct the org if it doesn't exist locally
+    // We use encodeURIComponent to handle UTF-8 chars safely for btoa
     const payload = JSON.stringify({ 
       id: org.id, 
       nm: org.name,
@@ -271,12 +271,15 @@ export const generateSecureToken = (org: { id: string, name: string }): string =
       v: 2 
     });
     
-    // Simple XOR Cipher to obscure the JSON
-    const encrypted = payload.split('').map((c, i) => 
+    const encodedPayload = encodeURIComponent(payload);
+
+    // Simple XOR Cipher
+    // We XOR the char codes of the encoded ASCII string
+    const encrypted = encodedPayload.split('').map((c, i) => 
       c.charCodeAt(0) ^ ENCRYPTION_KEY.charCodeAt(i % ENCRYPTION_KEY.length)
     );
     
-    // Convert to Base64
+    // Convert to Base64 (Input is all ASCII now because of encodeURIComponent)
     const base64 = btoa(String.fromCharCode(...encrypted));
     
     // Make URL safe
@@ -297,15 +300,16 @@ export const parseSecureToken = (token: string): { id: string, nm?: string } | n
     const encryptedCodes = atob(base64).split('').map(c => c.charCodeAt(0));
     
     // Reverse XOR Cipher
-    const decryptedString = encryptedCodes.map((c, i) => 
+    const decryptedEncodedString = encryptedCodes.map((c, i) => 
       String.fromCharCode(c ^ ENCRYPTION_KEY.charCodeAt(i % ENCRYPTION_KEY.length))
     ).join('');
     
-    const data = JSON.parse(decryptedString);
+    const payload = decodeURIComponent(decryptedEncodedString);
+    const data = JSON.parse(payload);
     
     return {
         id: data.id,
-        nm: data.nm // Optional, might not exist in v1 tokens
+        nm: data.nm 
     };
   } catch (error) {
     console.error("Token parsing failed", error);
