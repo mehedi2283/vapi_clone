@@ -32,66 +32,84 @@ export default function App() {
 
   // 1. Check Auth Session on Mount & Listen for changes & Check Magic Link
   useEffect(() => {
-    const checkSession = async () => {
-        // A. Check for Magic Link Token in URL (Search or Hash)
-        const params = new URLSearchParams(window.location.search);
-        let token = params.get('token');
-        
-        // Fallback: Check hash params just in case (e.g. #/?token=...)
-        if (!token && window.location.hash.includes('token=')) {
-            const hashParts = window.location.hash.split('?');
-            if (hashParts.length > 1) {
-                const hashParams = new URLSearchParams(hashParts[1]);
-                token = hashParams.get('token');
-            }
+    // 0. Detect Token Immediately
+    const params = new URLSearchParams(window.location.search);
+    let token = params.get('token');
+    
+    // Fallback: Check hash params just in case (e.g. #/?token=...)
+    if (!token && window.location.hash.includes('token=')) {
+        const hashParts = window.location.hash.split('?');
+        if (hashParts.length > 1) {
+            const hashParams = new URLSearchParams(hashParts[1]);
+            token = hashParams.get('token');
         }
-        
-        if (token) {
-            const decoded = parseSecureToken(token);
-            if (decoded && decoded.id) {
-                console.log("Magic Link detected for Org ID:", decoded.id);
-                
-                // Create a synthetic "Magic" session
-                const magicSession = {
+    }
+
+    if (token) {
+        // --- MAGIC LINK FLOW ---
+        // We handle this exclusively and do NOT attach standard auth listeners 
+        // to prevent them from overwriting our magic session with a "signed out" state.
+        const handleMagicLink = async () => {
+             console.log("Processing Magic Link...");
+             const decoded = parseSecureToken(token!);
+             
+             if (decoded && decoded.id) {
+                 console.log("Magic Link Valid. Org:", decoded.id);
+                 
+                 // 1. Set Session immediately to block Login screen
+                 setSession({
                     user: {
                         id: 'magic_user',
                         email: 'magic@link.access',
                         role: 'authenticated'
                     }
-                };
-                
-                setSession(magicSession);
-                setIsAdmin(false); // Magic links are never admins
-                
-                // Attempt to fetch specific org
-                setIsLoadingOrgs(true);
-                try {
-                    // Fetch specifically this org
-                    const orgs = await supabaseService.getOrganizations(decoded.id);
-                    if (orgs.length > 0) {
-                        setOrganizations(orgs);
-                        setSelectedOrg(orgs[0]);
-                        // Clean URL without reloading
-                        window.history.replaceState({}, document.title, window.location.pathname);
-                    } else {
-                        console.error("Magic link valid, but organization not found.");
-                        // Fallback to demo org if DB fails
-                        const demoOrg = MOCK_ORGS.find(o => o.id === decoded.id) || { ...MOCK_ORGS[0], id: decoded.id, name: decoded.nm || 'Magic Org' };
-                        setOrganizations([demoOrg]);
-                        setSelectedOrg(demoOrg);
-                        window.history.replaceState({}, document.title, window.location.pathname);
-                    }
-                } catch (e) {
-                    console.error("Magic link load error", e);
-                } finally {
-                    setIsLoadingOrgs(false);
-                    setIsAuthLoading(false);
-                }
-                return; // Stop here, we are logged in via Magic Link
-            }
-        }
+                 });
+                 setIsAdmin(false);
 
-        // B. Check Local Fallback (Demo Mode)
+                 // 2. Load Data
+                 setIsLoadingOrgs(true);
+                 try {
+                     // Try to fetch the specific org
+                     const orgs = await supabaseService.getOrganizations(decoded.id);
+                     if (orgs.length > 0) {
+                         setOrganizations(orgs);
+                         setSelectedOrg(orgs[0]);
+                     } else {
+                         // Fallback logic for when DB fetch fails or org not found
+                         console.warn("Org not found via Magic Link (or offline). Using mock fallback.");
+                         const demoOrg = MOCK_ORGS.find(o => o.id === decoded.id) || { 
+                             ...MOCK_ORGS[0], 
+                             id: decoded.id, 
+                             name: decoded.nm || 'Magic Org',
+                             role: 'user'
+                         };
+                         setOrganizations([demoOrg]);
+                         setSelectedOrg(demoOrg);
+                     }
+                     // Clean URL without reloading
+                     window.history.replaceState({}, document.title, window.location.pathname);
+                 } catch (e) {
+                     console.error("Magic Link Data Error:", e);
+                     // Robust fallback
+                     setOrganizations(MOCK_ORGS);
+                     setSelectedOrg(MOCK_ORGS[0]);
+                 } finally {
+                     setIsLoadingOrgs(false);
+                     setIsAuthLoading(false);
+                 }
+             } else {
+                 console.error("Invalid Magic Link Token");
+                 initStandardAuth(); // Fallback if token invalid
+             }
+        };
+
+        handleMagicLink();
+        return; // STOP EXECUTION HERE - Do not attach Supabase listeners
+    }
+
+    // --- STANDARD AUTH FLOW ---
+    const initStandardAuth = async () => {
+        // Check Local Fallback (Demo Mode)
         const demoSession = localStorage.getItem('vapi_demo_session');
         if (demoSession) {
             setSession(JSON.parse(demoSession));
@@ -99,7 +117,7 @@ export default function App() {
             return;
         }
 
-        // C. Check Supabase
+        // Check Supabase
         if (supabase) {
             try {
                 const { data: { session: sbSession } } = await supabase.auth.getSession();
@@ -111,9 +129,9 @@ export default function App() {
         setIsAuthLoading(false);
     };
 
-    checkSession();
+    initStandardAuth();
 
-    // Listener 1: Real Supabase Events
+    // Listeners (Only attach if we are doing standard auth)
     let sbListener: any = null;
     if (supabase) {
         const { data } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -122,7 +140,6 @@ export default function App() {
         sbListener = data.subscription;
     }
 
-    // Listener 2: Custom Fallback Events (e.g. from SignIn failure fallback)
     const handleCustomAuth = () => {
         const demoSession = localStorage.getItem('vapi_demo_session');
         setSession(demoSession ? JSON.parse(demoSession) : null);
@@ -196,7 +213,6 @@ export default function App() {
 
     const loadAssistantsData = async () => {
       const apiKey = VAPI_PRIVATE_KEY;
-      // Note: We attempt fetch even if no key to trigger mock fallback in service
       
       try {
           const vapiData = await fetchVapiAssistants(apiKey);
@@ -292,8 +308,6 @@ export default function App() {
   }
 
   // 3. Master Admin View (No Org Selected)
-  // Logic: User must be admin (implied by the fact that they are logged in AND selectedOrg is null)
-  // Note: Standard users always have selectedOrg set in useEffect.
   if (!selectedOrg) {
     return (
       <MasterOverview 

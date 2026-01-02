@@ -31,7 +31,6 @@ export const fetchVapiAssistants = async (apiKey: string): Promise<Assistant[]> 
     });
 
     if (!response.ok) {
-      // If unauthorized or other error, fallback to mocks for demo purposes
       console.warn("Vapi API request failed, falling back to mock data:", response.statusText);
       return MOCK_ASSISTANTS;
     }
@@ -40,7 +39,6 @@ export const fetchVapiAssistants = async (apiKey: string): Promise<Assistant[]> 
     
     // Map Vapi response to our Assistant type
     return data.map((item: any) => {
-      // Attempt to extract system prompt
       let systemPrompt = '';
       if (item.model?.messages) {
         const sysMsg = item.model.messages.find((m: any) => m.role === 'system');
@@ -52,7 +50,7 @@ export const fetchVapiAssistants = async (apiKey: string): Promise<Assistant[]> 
 
       return {
         id: item.id,
-        orgId: item.orgId, // We will override this in the App to match Niya Org context
+        orgId: item.orgId,
         name: item.name || 'Untitled Assistant',
         model: {
           provider: item.model?.provider || 'unknown',
@@ -78,12 +76,10 @@ export const fetchVapiAssistants = async (apiKey: string): Promise<Assistant[]> 
 };
 
 export const createVapiAssistant = async (apiKey: string, assistant: Assistant): Promise<Assistant | null> => {
-  // Mock success for demo if offline/no-key
   if (!apiKey || apiKey === 'demo') {
       return { ...assistant, id: `asst_mock_${Date.now()}` };
   }
 
-  // Construct payload according to Vapi API documentation
   const payload = {
     name: assistant.name,
     transcriber: {
@@ -121,14 +117,12 @@ export const createVapiAssistant = async (apiKey: string, assistant: Assistant):
     });
 
     if (!response.ok) {
-       // Allow fallback for demo creation
        console.warn("Create failed, falling back to local mock");
        return { ...assistant, id: `asst_local_${Date.now()}` };
     }
 
     const data = await response.json();
     
-    // Map back to our Assistant type
     return {
       id: data.id,
       orgId: data.orgId,
@@ -152,7 +146,6 @@ export const createVapiAssistant = async (apiKey: string, assistant: Assistant):
 
   } catch (error) {
     console.error("Error creating assistant:", error);
-    // Return mock on network error
     return { ...assistant, id: `asst_offline_${Date.now()}` };
   }
 };
@@ -199,7 +192,6 @@ export const updateVapiAssistant = async (apiKey: string, assistant: Assistant):
     });
 
     if (!response.ok) {
-        // Fallback
         console.warn("Update failed, using local version");
         return assistant;
     }
@@ -236,8 +228,6 @@ export const updateVapiAssistant = async (apiKey: string, assistant: Assistant):
 export const deleteVapiAssistant = async (apiKey: string, assistantId: string): Promise<void> => {
   if (!apiKey || apiKey === 'demo') return;
 
-  console.log(`Attempting to delete assistant: ${assistantId}`);
-
   try {
     const response = await fetch(`https://api.vapi.ai/assistant/${assistantId}`, {
       method: 'DELETE',
@@ -252,7 +242,6 @@ export const deleteVapiAssistant = async (apiKey: string, assistantId: string): 
     
   } catch (error) {
     console.error("Error deleting assistant:", error);
-    // Proceed as if deleted locally
   }
 };
 
