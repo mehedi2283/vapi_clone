@@ -1,3 +1,4 @@
+
 export interface Assistant {
   id: string;
   orgId: string; // Linked to Organization ID
@@ -62,7 +63,7 @@ export interface Organization {
   id: string;
   name: string;
   email?: string; // Contact/Login Email
-  password?: string; // Optional for security/display, but used during creation
+  role?: 'user' | 'admin'; // Access Level
   plan: 'trial' | 'pro' | 'enterprise';
   credits: number;
   usageCost: number;

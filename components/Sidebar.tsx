@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { ViewState, Organization } from '../types';
 import { 
   LayoutDashboard, 
@@ -6,21 +6,30 @@ import {
   Phone, 
   FileAudio, 
   ScrollText, 
-  Settings, 
   CreditCard,
   LogOut,
   Wrench,
   ChevronLeft
 } from 'lucide-react';
+import { supabaseService } from '../services/supabaseClient';
 
 interface SidebarProps {
   currentView: ViewState;
   onChangeView: (view: ViewState) => void;
   selectedOrg: Organization;
   onBackToMaster: () => void;
+  isAdmin: boolean;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, selectedOrg, onBackToMaster }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, selectedOrg, onBackToMaster, isAdmin }) => {
+  const [userEmail, setUserEmail] = useState<string>('');
+  
+  useEffect(() => {
+    supabaseService.getCurrentUser().then(user => {
+        if (user?.email) setUserEmail(user.email);
+    });
+  }, []);
+
   const navItemClass = (view: ViewState) => `
     flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer
     ${currentView === view 
@@ -32,20 +41,22 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, sel
     <div className="w-64 h-screen border-r border-vapi-border bg-vapi-bg flex flex-col fixed left-0 top-0 z-50">
       {/* Org Header */}
       <div className="p-4 border-b border-vapi-border bg-zinc-900/30">
-        <button 
-          onClick={onBackToMaster}
-          className="flex items-center gap-1 text-xs text-zinc-500 hover:text-white mb-3 transition-colors group"
-        >
-          <ChevronLeft size={12} className="group-hover:-translate-x-0.5 transition-transform" />
-          Back to Master
-        </button>
+        {isAdmin && (
+            <button 
+            onClick={onBackToMaster}
+            className="flex items-center gap-2 text-xs font-medium text-zinc-400 hover:text-vapi-accent mb-4 transition-colors group w-full p-2 rounded-lg hover:bg-zinc-900 border border-transparent hover:border-zinc-800"
+            >
+            <ChevronLeft size={14} className="group-hover:-translate-x-0.5 transition-transform" />
+            Back to Master
+            </button>
+        )}
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 bg-gradient-to-br from-zinc-700 to-zinc-900 rounded-lg flex items-center justify-center border border-zinc-700 shadow-inner">
              <span className="text-white font-bold text-xs">{selectedOrg.name.substring(0, 2).toUpperCase()}</span>
           </div>
           <div className="overflow-hidden">
             <h2 className="text-sm font-bold text-white truncate">{selectedOrg.name}</h2>
-            <p className="text-[10px] text-zinc-500 font-mono truncate">ID: {selectedOrg.id}</p>
+            <p className="text-[10px] text-zinc-500 font-mono truncate">ID: {selectedOrg.id.substring(0,8)}...</p>
           </div>
         </div>
       </div>
@@ -93,18 +104,22 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, sel
         
         {/* Logout Button */}
         <div 
-            onClick={onBackToMaster}
+            onClick={() => {
+                supabaseService.signOut();
+            }}
             className="flex items-center gap-3 px-2 py-2 rounded-md hover:bg-zinc-900 cursor-pointer group transition-colors"
-            title="Log Out / Switch Account"
+            title="Log Out"
         >
           <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-xs font-bold text-white border border-indigo-500">
-            MA
+            {(userEmail || 'U').substring(0, 2).toUpperCase()}
           </div>
           <div className="flex-1 overflow-hidden">
-            <p className="text-sm font-medium text-white truncate group-hover:text-zinc-200">Master Admin</p>
-            <p className="text-xs text-zinc-500 truncate">admin@vapi.clone</p>
+            <p className="text-sm font-medium text-white truncate group-hover:text-zinc-200">
+                {isAdmin ? 'Master Admin' : 'User'}
+            </p>
+            <p className="text-xs text-zinc-500 truncate">{userEmail || 'loading...'}</p>
           </div>
-          <LogOut size={16} className="text-zinc-500 group-hover:text-white transition-colors" />
+          <LogOut size={16} className="text-zinc-500 group-hover:text-red-400 transition-colors" />
         </div>
       </div>
     </div>

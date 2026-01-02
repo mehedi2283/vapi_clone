@@ -7,158 +7,166 @@ import { PhoneNumbers } from './pages/PhoneNumbers';
 import { Files } from './pages/Files';
 import { Tools } from './pages/Tools';
 import { MasterOverview } from './pages/MasterOverview';
+import { Login } from './pages/Login';
 import { ViewState, Organization, Assistant } from './types';
-import { MOCK_ORGS, MOCK_ASSISTANTS, VAPI_PRIVATE_KEY, NIYA_ORG_ID } from './constants';
-import { fetchVapiAssistants, parseSecureToken } from './services/vapiService';
-import { supabaseService, supabase } from './services/supabaseClient';
+import { MOCK_ASSISTANTS, VAPI_PRIVATE_KEY, NIYA_ORG_ID, MOCK_ORGS } from './constants';
+import { fetchVapiAssistants } from './services/vapiService';
+import { supabaseService, supabase, authStateChanged } from './services/supabaseClient';
 import { Loader2 } from 'lucide-react';
 
-export default function App() {
-  // Organizations state
-  const [organizations, setOrganizations] = useState<Organization[]>([]);
-  const [isLoadingOrgs, setIsLoadingOrgs] = useState(true);
+const ADMIN_EMAIL = 'admin@vapi.clone'; // Hardcoded admin email for clone behavior fallback
 
+export default function App() {
+  // Auth State
+  const [session, setSession] = useState<any>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  // App State
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [isLoadingOrgs, setIsLoadingOrgs] = useState(false);
+  
   const [selectedOrg, setSelectedOrg] = useState<Organization | null>(null);
   const [currentView, setCurrentView] = useState<ViewState>('overview');
-  const [isResolvingLink, setIsResolvingLink] = useState(true);
-  
-  // Lifted state for assistants to share across views and persist updates
   const [assistants, setAssistants] = useState<Assistant[]>(MOCK_ASSISTANTS);
 
-  // Initialize Data from Supabase (or Fallback)
+  // 1. Check Auth Session on Mount & Listen for changes
   useEffect(() => {
+    const checkSession = async () => {
+        // A. Check Local Fallback (Demo Mode)
+        const demoSession = localStorage.getItem('vapi_demo_session');
+        if (demoSession) {
+            setSession(JSON.parse(demoSession));
+            setIsAuthLoading(false);
+            return;
+        }
+
+        // B. Check Supabase
+        if (supabase) {
+            try {
+                const { data: { session: sbSession } } = await supabase.auth.getSession();
+                setSession(sbSession);
+            } catch (e) {
+                console.warn("Supabase auth check failed (using offline mode?)");
+            }
+        }
+        setIsAuthLoading(false);
+    };
+
+    checkSession();
+
+    // Listener 1: Real Supabase Events
+    let sbListener: any = null;
+    if (supabase) {
+        const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+            setSession(session);
+        });
+        sbListener = data.subscription;
+    }
+
+    // Listener 2: Custom Fallback Events (e.g. from SignIn failure fallback)
+    const handleCustomAuth = () => {
+        const demoSession = localStorage.getItem('vapi_demo_session');
+        setSession(demoSession ? JSON.parse(demoSession) : null);
+    };
+    
+    authStateChanged.addEventListener('signedIn', handleCustomAuth);
+    authStateChanged.addEventListener('signedOut', handleCustomAuth);
+
+    return () => {
+        sbListener?.unsubscribe();
+        authStateChanged.removeEventListener('signedIn', handleCustomAuth);
+        authStateChanged.removeEventListener('signedOut', handleCustomAuth);
+    };
+  }, []);
+
+  // 2. Load Data when Session Exists
+  useEffect(() => {
+    if (!session) return;
+
     const initData = async () => {
         setIsLoadingOrgs(true);
         try {
-            // Attempt to fetch from Supabase
-            const dbOrgs = await supabaseService.getOrganizations();
+            const userEmail = session.user.email;
             
-            if (dbOrgs.length > 0) {
-                setOrganizations(dbOrgs);
+            // First, fetch the user's specific organization to check their Role
+            // The table is indexed by ID, which matches Auth ID
+            const myOrgs = await supabaseService.getOrganizations(session.user.id);
+            const myProfile = myOrgs[0];
+
+            // Determine if Admin:
+            // 1. Explicit 'admin' role in DB
+            // 2. OR hardcoded fallback email (for bootstrapping)
+            const isMasterAdmin = (myProfile?.role === 'admin') || (userEmail === ADMIN_EMAIL);
+            setIsAdmin(isMasterAdmin);
+            
+            if (isMasterAdmin) {
+                 // If Admin, fetch ALL organizations for the Master View
+                 const allOrgs = await supabaseService.getOrganizations(); // No ID param = All
+                 setOrganizations(allOrgs.length > 0 ? allOrgs : MOCK_ORGS); // Fallback to mocks if empty
+                 setSelectedOrg(null); // Default to Master Overview
             } else {
-                // If DB empty or connection failed (returns empty), fall back to LocalStorage or Mocks
-                // This ensures the app works even if the user hasn't set up Supabase keys yet.
-                console.log("Using LocalStorage/Mock fallback for organizations.");
-                try {
-                    const saved = localStorage.getItem('vapi_cloned_orgs');
-                    if (saved) {
-                        setOrganizations(JSON.parse(saved));
-                    } else {
-                        setOrganizations(MOCK_ORGS);
-                    }
-                } catch {
-                    setOrganizations(MOCK_ORGS);
-                }
+                 // If Regular User, just use their profile
+                 if (myOrgs.length > 0) {
+                     setOrganizations(myOrgs);
+                     setSelectedOrg(myProfile);
+                 } else {
+                     // Fallback for Demo/Mock User without DB entry
+                     console.log("User has no organization (or offline). Using default Mock Org.");
+                     const defaultOrg: Organization = MOCK_ORGS[0]; // Use Acme Corp as default for demo
+                     setOrganizations([defaultOrg]);
+                     setSelectedOrg(defaultOrg);
+                 }
             }
+
         } catch (error) {
             console.error("Failed to init data", error);
+            // Safety fallback
             setOrganizations(MOCK_ORGS);
+            setSelectedOrg(MOCK_ORGS[0]);
         } finally {
             setIsLoadingOrgs(false);
         }
     };
+
     initData();
-  }, []);
+  }, [session]);
 
-  // Persistence Effect: Sync to LocalStorage as a backup whenever they change (for MasterOverview updates)
+  // 3. Load Assistants (Same as before, merged with mappings)
   useEffect(() => {
-    if (organizations.length > 0) {
-        localStorage.setItem('vapi_cloned_orgs', JSON.stringify(organizations));
-    }
-  }, [organizations]);
+    if (!session) return;
 
-  // Check for Deep Link (encrypted token in URL)
-  // This effect runs whenever 'organizations' or 'isLoadingOrgs' changes
-  // to ensure we match against loaded data.
-  useEffect(() => {
-    if (isLoadingOrgs) return; // Wait for DB fetch
-
-    const handleDeepLink = async () => {
-        const params = new URLSearchParams(window.location.search);
-        const token = params.get('token');
-        const legacyOrgId = params.get('orgId');
-
-        // If no token, stop loading immediately
-        if (!token && !legacyOrgId) {
-            setIsResolvingLink(false);
-            return;
-        }
-
-        let targetOrgId = legacyOrgId;
-        let tokenData = null;
-        
-        if (token) {
-            tokenData = parseSecureToken(token);
-            if (tokenData && tokenData.id) {
-                targetOrgId = tokenData.id;
-            }
-        }
-
-        if (targetOrgId) {
-            // Try to find in loaded orgs
-            let targetOrg = organizations.find(o => o.id === targetOrgId);
-            
-            // If not found locally, but we have name data in the token, 
-            // recreate/import the org (Client-side simulation if DB fetch missed it or for sharing without DB)
-            if (!targetOrg && tokenData?.nm) {
-                console.log(`Importing organization from token: ${tokenData.nm}`);
-                const importedOrg: Organization = {
-                    id: targetOrgId,
-                    name: tokenData.nm,
-                    plan: 'pro',
-                    credits: 50.00, 
-                    usageCost: 0.00,
-                    status: 'active',
-                    createdAt: new Date().toISOString()
-                };
-                
-                // We add it to state. Note: We do NOT save imported magic-links to Supabase automatically 
-                // to prevent clutter, unless we want to. Let's keep it local session for now.
-                setOrganizations(prev => [...prev, importedOrg]);
-                targetOrg = importedOrg;
-            }
-
-            if (targetOrg) {
-                console.log(`Deep linking to organization: ${targetOrg.name}`);
-                setSelectedOrg(targetOrg);
-                window.history.replaceState({}, '', window.location.pathname);
-            } else {
-                console.warn(`Organization ID ${targetOrgId} not found.`);
-            }
-        }
-        setIsResolvingLink(false);
-    };
-
-    handleDeepLink();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLoadingOrgs]); // Run once loaded
-
-  // Fetch real Vapi assistants for Niya Org on mount
-  useEffect(() => {
-    const loadNiyaAssistants = async () => {
+    const loadAssistantsData = async () => {
       const apiKey = VAPI_PRIVATE_KEY;
+      // Note: We attempt fetch even if no key to trigger mock fallback in service
       
-      if (!apiKey) {
-        return;
-      }
+      try {
+          const vapiData = await fetchVapiAssistants(apiKey);
+          const mappings = await supabaseService.getAssistantMappings();
+          const mappingMap = new Map(mappings.map(m => [m.assistant_id, m.org_id]));
 
-      const vapiData = await fetchVapiAssistants(apiKey);
-      
-      if (vapiData.length > 0) {
-        setAssistants(prev => {
-          const otherOrgAssistants = prev.filter(a => a.orgId !== NIYA_ORG_ID);
-          const niyaAssistants = vapiData.map(a => ({
-            ...a,
-            orgId: NIYA_ORG_ID
-          }));
-          return [...otherOrgAssistants, ...niyaAssistants];
-        });
+          const mergedAssistants = vapiData.map(a => {
+              if (mappingMap.has(a.id)) {
+                  return { ...a, orgId: mappingMap.get(a.id)! };
+              }
+              return { ...a, orgId: a.orgId || NIYA_ORG_ID };
+          });
+
+          setAssistants(mergedAssistants);
+      } catch (error) {
+          console.error("Error loading assistants data:", error);
+          setAssistants(MOCK_ASSISTANTS);
       }
     };
+    
+    // Defer assistant loading until we know who is logged in (roughly)
+    if (!isAuthLoading) {
+        loadAssistantsData();
+    }
+  }, [isAuthLoading, session]);
 
-    loadNiyaAssistants();
-  }, []);
 
+  // Handlers
   const handleSelectOrg = (org: Organization) => {
     setSelectedOrg(org);
     setCurrentView('overview');
@@ -166,47 +174,42 @@ export default function App() {
 
   const handleUpdateOrg = (updatedOrg: Organization) => {
     setOrganizations(prev => prev.map(o => o.id === updatedOrg.id ? updatedOrg : o));
+    if (selectedOrg?.id === updatedOrg.id) {
+        setSelectedOrg(updatedOrg);
+    }
   };
 
   const handleAddOrg = (newOrg: Organization) => {
     setOrganizations(prev => [newOrg, ...prev]);
   };
 
-  const handleTransferAssistant = (assistant: Assistant, targetOrgId: string) => {
+  const handleDeleteOrg = async (orgId: string) => {
+    // 1. Call Service
+    await supabaseService.deleteOrganization(orgId);
+    // 2. Update Local State
+    setOrganizations(prev => prev.filter(o => o.id !== orgId));
+  };
+
+  const handleTransferAssistant = async (assistant: Assistant, targetOrgId: string) => {
     setAssistants(prev => prev.map(a => 
         a.id === assistant.id 
         ? { ...a, orgId: targetOrgId } 
         : a
     ));
+    await supabaseService.saveAssistantMapping(assistant.id, targetOrgId);
   };
 
   const handleBackToMaster = () => {
+    // If admin (check list or session), go back to master list
+    // Re-verify logic: If selectedOrg is set, we are in Dashboard view.
+    // If we clear it, we go to Master view (if allowed).
     setSelectedOrg(null);
   };
 
-  const renderContent = () => {
-    switch (currentView) {
-      case 'overview': return <Overview />;
-      case 'assistants': 
-        return (
-          <Assistants 
-            assistants={assistants}
-            setAssistants={setAssistants}
-            selectedOrgId={selectedOrg?.id || ''}
-            selectedOrgName={selectedOrg?.name || ''}
-            organizations={organizations} // Passed for transfer functionality
-          />
-        );
-      case 'logs': return <Logs />;
-      case 'phone-numbers': return <PhoneNumbers />;
-      case 'files': return <Files />;
-      case 'tools': return <Tools />;
-      default: return <Overview />;
-    }
-  };
+  // --- RENDER ---
 
-  // Loading Screen for Deep Links
-  if (isResolvingLink || isLoadingOrgs) {
+  // 1. Loading Screen
+  if (isAuthLoading || (session && isLoadingOrgs)) {
       return (
           <div className="min-h-screen bg-vapi-bg flex items-center justify-center font-sans">
               <div className="flex flex-col items-center gap-4 animate-fade-in">
@@ -216,14 +219,23 @@ export default function App() {
                  </div>
                  <div className="text-center">
                     <h2 className="text-white font-semibold text-lg">Vapi Dashboard</h2>
-                    <p className="text-zinc-500 text-sm mt-1">{isLoadingOrgs ? 'Loading organizations...' : 'Verifying secure token...'}</p>
+                    <p className="text-zinc-500 text-sm mt-1">
+                        {isAuthLoading ? 'Authenticating...' : 'Loading your organization...'}
+                    </p>
                  </div>
               </div>
           </div>
       );
   }
 
-  // If no org is selected, show Master View
+  // 2. Login Screen (No Session)
+  if (!session) {
+      return <Login />;
+  }
+
+  // 3. Master Admin View (No Org Selected)
+  // Logic: User must be admin (implied by the fact that they are logged in AND selectedOrg is null)
+  // Note: Standard users always have selectedOrg set in useEffect.
   if (!selectedOrg) {
     return (
       <MasterOverview 
@@ -232,32 +244,69 @@ export default function App() {
         onSelectOrg={handleSelectOrg}
         onUpdateOrg={handleUpdateOrg}
         onAddOrg={handleAddOrg}
+        onDeleteOrg={handleDeleteOrg}
         onTransferAssistant={handleTransferAssistant}
       />
     );
   }
 
-  // If org is selected, show Dashboard View
+  // 4. Org Dashboard View
+  if (selectedOrg) {
+      return (
+        <div className="flex min-h-screen bg-vapi-bg font-sans selection:bg-vapi-accent selection:text-black animate-fade-in">
+          <Sidebar 
+            currentView={currentView} 
+            onChangeView={setCurrentView} 
+            selectedOrg={selectedOrg}
+            onBackToMaster={handleBackToMaster}
+            isAdmin={isAdmin}
+          />
+          <main className="flex-1 ml-64 p-8 overflow-y-auto h-screen">
+            <div className="max-w-7xl mx-auto">
+              {(() => {
+                switch (currentView) {
+                  case 'overview': return <Overview />;
+                  case 'assistants': 
+                    return (
+                      <Assistants 
+                        assistants={assistants}
+                        setAssistants={setAssistants}
+                        selectedOrgId={selectedOrg.id}
+                        selectedOrgName={selectedOrg.name}
+                      />
+                    );
+                  case 'logs': return <Logs />;
+                  case 'phone-numbers': return <PhoneNumbers />;
+                  case 'files': return <Files orgId={selectedOrg.id} />;
+                  case 'tools': return <Tools orgId={selectedOrg.id} />;
+                  default: return <Overview />;
+                }
+              })()}
+            </div>
+          </main>
+          
+          <div className="md:hidden fixed inset-0 bg-black z-[100] flex items-center justify-center p-8 text-center">
+            <div>
+              <h2 className="text-xl font-bold text-white mb-2">Desktop Only</h2>
+              <p className="text-zinc-400">Please view this dashboard on a larger screen.</p>
+            </div>
+          </div>
+        </div>
+      );
+  }
+
   return (
-    <div className="flex min-h-screen bg-vapi-bg font-sans selection:bg-vapi-accent selection:text-black animate-fade-in">
-      <Sidebar 
-        currentView={currentView} 
-        onChangeView={setCurrentView} 
-        selectedOrg={selectedOrg}
-        onBackToMaster={handleBackToMaster}
-      />
-      <main className="flex-1 ml-64 p-8 overflow-y-auto h-screen">
-        <div className="max-w-7xl mx-auto">
-          {renderContent()}
-        </div>
-      </main>
-      
-      <div className="md:hidden fixed inset-0 bg-black z-[100] flex items-center justify-center p-8 text-center">
-        <div>
-          <h2 className="text-xl font-bold text-white mb-2">Desktop Only</h2>
-          <p className="text-zinc-400">Please view this dashboard on a larger screen for the best experience.</p>
-        </div>
-      </div>
+    <div className="min-h-screen bg-vapi-bg flex flex-col items-center justify-center p-8 text-center">
+        <h2 className="text-xl font-bold text-white mb-2">Account Error</h2>
+        <p className="text-zinc-400 max-w-md mb-6">
+            Unable to determine account status.
+        </p>
+        <button 
+            onClick={() => supabaseService.signOut()}
+            className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg font-medium transition-colors"
+        >
+            Sign Out
+        </button>
     </div>
   );
 }
