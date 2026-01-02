@@ -1,0 +1,7 @@
+{
+  "name": "Vapi Dashboard Clone",
+  "description": "A high-fidelity clone of the Vapi.ai dashboard featuring voice assistant management, analytics, and a Gemini-powered playground for testing assistant prompts.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
