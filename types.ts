@@ -61,6 +61,8 @@ export interface ToolItem {
 export interface Organization {
   id: string;
   name: string;
+  email?: string; // Contact/Login Email
+  password?: string; // Optional for security/display, but used during creation
   plan: 'trial' | 'pro' | 'enterprise';
   credits: number;
   usageCost: number;

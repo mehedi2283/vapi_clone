@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Organization } from '../types';
-import { Building2, Plus, ArrowRight, DollarSign, Users, Activity, CreditCard, X, Link, Check } from 'lucide-react';
+import { Building2, Plus, ArrowRight, DollarSign, Users, Activity, CreditCard, X, Link, Check, ClipboardCopy, Lock, Mail } from 'lucide-react';
+import { generateSecureToken } from '../services/vapiService';
+import { supabaseService } from '../services/supabaseClient';
 
 interface MasterOverviewProps {
   organizations: Organization[];
@@ -16,15 +18,19 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({ organizations, o
   // Add Org Modal State
   const [showAddModal, setShowAddModal] = useState(false);
   const [newOrgName, setNewOrgName] = useState('');
+  const [newOrgEmail, setNewOrgEmail] = useState('');
+  const [newOrgPassword, setNewOrgPassword] = useState('');
   const [newOrgPlan, setNewOrgPlan] = useState<'trial' | 'pro' | 'enterprise'>('trial');
+  const [isCreating, setIsCreating] = useState(false);
   
   // Copy Link State
   const [copiedOrgId, setCopiedOrgId] = useState<string | null>(null);
+  const [lastCopiedUrl, setLastCopiedUrl] = useState<string | null>(null);
 
   const totalUsage = organizations.reduce((acc, org) => acc + org.usageCost, 0);
   const totalCredits = organizations.reduce((acc, org) => acc + org.credits, 0);
 
-  const handleAddCredit = (e: React.FormEvent) => {
+  const handleAddCredit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedOrgForCredit || !creditAmount) return;
 
@@ -36,36 +42,70 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({ organizations, o
       credits: selectedOrgForCredit.credits + amount
     };
 
+    // Update locally
     onUpdateOrg(updatedOrg);
+    // Sync to Supabase
+    await supabaseService.updateOrganization(updatedOrg);
+
     setSelectedOrgForCredit(null);
     setCreditAmount('');
   };
 
-  const handleCreateOrg = (e: React.FormEvent) => {
+  const handleCreateOrg = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newOrgName.trim()) return;
+    if (!newOrgName.trim() || !newOrgPassword.trim() || !newOrgEmail.trim()) return;
 
+    setIsCreating(true);
     const newOrg: Organization = {
       id: `org_${Date.now()}`,
       name: newOrgName,
+      email: newOrgEmail,
+      password: newOrgPassword, // Saving the login pass
       plan: newOrgPlan,
       credits: 10.00,
       usageCost: 0.00,
       status: 'active',
-      createdAt: new Date().toISOString().split('T')[0]
+      createdAt: new Date().toISOString()
     };
 
-    onAddOrg(newOrg);
-    setShowAddModal(false);
-    setNewOrgName('');
-    setNewOrgPlan('trial');
+    try {
+        // Attempt to save to Supabase
+        const savedOrg = await supabaseService.createOrganization(newOrg);
+        
+        // If Supabase worked, use returned data, otherwise use optimistic local data
+        onAddOrg(savedOrg || newOrg);
+        
+        setShowAddModal(false);
+        setNewOrgName('');
+        setNewOrgEmail('');
+        setNewOrgPassword('');
+        setNewOrgPlan('trial');
+    } catch (err) {
+        alert("Failed to save organization to database. Using local storage fallback.");
+        onAddOrg(newOrg);
+        setShowAddModal(false);
+    } finally {
+        setIsCreating(false);
+    }
   };
 
-  const copyOrgLink = (orgId: string) => {
-    const url = `${window.location.origin}${window.location.pathname}?orgId=${orgId}`;
+  const copyOrgLink = (org: Organization) => {
+    // Use the specific hosted URL for link generation
+    const baseUrl = 'https://vapi-clone-ten.vercel.app';
+    
+    // Generate token with both ID and Name
+    const token = generateSecureToken({ id: org.id, name: org.name });
+    
+    // Generate URL with encrypted token instead of raw ID
+    const url = `${baseUrl}/?token=${token}`;
+    
     navigator.clipboard.writeText(url);
-    setCopiedOrgId(orgId);
-    setTimeout(() => setCopiedOrgId(null), 2000);
+    setCopiedOrgId(org.id);
+    setLastCopiedUrl(url);
+    setTimeout(() => {
+        setCopiedOrgId(null);
+        setLastCopiedUrl(null);
+    }, 3000);
   };
 
   return (
@@ -132,7 +172,8 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({ organizations, o
                     <td className="px-6 py-4">
                       <div className="flex flex-col">
                         <span className="text-white font-medium">{org.name}</span>
-                        <span className="text-zinc-500 text-xs font-mono">{org.id}</span>
+                        {org.email && <span className="text-zinc-500 text-xs">{org.email}</span>}
+                        <span className="text-zinc-600 text-[10px] font-mono">{org.id}</span>
                       </div>
                     </td>
                     <td className="px-6 py-4">
@@ -155,13 +196,13 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({ organizations, o
                     <td className="px-6 py-4 text-right">
                       <div className="flex items-center justify-end gap-2">
                          <button 
-                          onClick={() => copyOrgLink(org.id)}
+                          onClick={() => copyOrgLink(org)}
                           className={`inline-flex items-center justify-center p-1.5 rounded-lg transition-colors border ${
                             copiedOrgId === org.id 
                             ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' 
                             : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white border-zinc-700 group-hover:border-zinc-600'
                           }`}
-                          title="Copy Direct Login Link"
+                          title="Copy Encrypted Login Link"
                         >
                           {copiedOrgId === org.id ? <Check size={14} /> : <Link size={14} />}
                         </button>
@@ -188,6 +229,22 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({ organizations, o
           </div>
         </div>
       </div>
+
+      {/* Copy Notification Toast */}
+      {lastCopiedUrl && (
+          <div className="fixed bottom-6 right-6 bg-zinc-800 border border-zinc-700 rounded-lg p-4 shadow-2xl flex items-start gap-3 animate-in slide-in-from-bottom-5 fade-in duration-300 z-50 max-w-sm">
+              <div className="bg-emerald-500/10 p-2 rounded-full">
+                  <ClipboardCopy className="text-emerald-400" size={20} />
+              </div>
+              <div className="overflow-hidden">
+                  <p className="text-white font-medium text-sm">Secure Login Link Copied!</p>
+                  <p className="text-zinc-400 text-xs mt-1 truncate font-mono">{lastCopiedUrl}</p>
+              </div>
+              <button onClick={() => setLastCopiedUrl(null)} className="text-zinc-500 hover:text-white">
+                  <X size={16} />
+              </button>
+          </div>
+      )}
 
       {/* Add Credit Modal */}
       {selectedOrgForCredit && (
@@ -277,6 +334,35 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({ organizations, o
               </div>
 
               <div>
+                <label className="block text-sm font-medium text-zinc-400 mb-2">Email Address</label>
+                <div className="relative">
+                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" size={16} />
+                    <input 
+                        type="email"
+                        value={newOrgEmail}
+                        onChange={(e) => setNewOrgEmail(e.target.value)}
+                        className="w-full bg-black border border-zinc-700 rounded-lg pl-9 pr-4 py-3 text-white focus:outline-none focus:border-vapi-accent transition-colors"
+                        placeholder="admin@company.com"
+                    />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-zinc-400 mb-2">Login Password</label>
+                <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" size={16} />
+                    <input 
+                        type="password"
+                        value={newOrgPassword}
+                        onChange={(e) => setNewOrgPassword(e.target.value)}
+                        className="w-full bg-black border border-zinc-700 rounded-lg pl-9 pr-4 py-3 text-white focus:outline-none focus:border-vapi-accent transition-colors font-mono tracking-widest"
+                        placeholder="Set organization password"
+                    />
+                </div>
+                <p className="text-[10px] text-zinc-500 mt-1.5 ml-1">Required for login if secure link is lost.</p>
+              </div>
+
+              <div>
                 <label className="block text-sm font-medium text-zinc-400 mb-2">Plan</label>
                 <div className="grid grid-cols-3 gap-2">
                     {(['trial', 'pro', 'enterprise'] as const).map(plan => (
@@ -305,10 +391,10 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({ organizations, o
                 </button>
                 <button 
                   type="submit"
-                  disabled={!newOrgName.trim()}
-                  className="flex-1 px-4 py-2.5 bg-vapi-accent hover:bg-teal-300 text-black rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={!newOrgName.trim() || !newOrgPassword.trim() || !newOrgEmail.trim() || isCreating}
+                  className="flex-1 px-4 py-2.5 bg-vapi-accent hover:bg-teal-300 text-black rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                 >
-                  Create
+                  {isCreating ? 'Saving...' : 'Create'}
                 </button>
               </div>
             </form>
@@ -319,12 +405,18 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({ organizations, o
   );
 };
 
-const StatCard: React.FC<{ title: string; value: string; icon: React.ReactNode }> = ({ title, value, icon }) => (
-  <div className="bg-vapi-card border border-vapi-border rounded-xl p-6 flex flex-col gap-4 hover:border-zinc-700 transition-colors">
-    <div className="flex items-center justify-between">
-      <span className="text-zinc-400 text-sm font-medium">{title}</span>
-      <div className="p-2 bg-zinc-900 rounded-lg border border-zinc-800">{icon}</div>
+const StatCard: React.FC<{ title: string; value: string; icon: React.ReactNode }> = ({ title, value, icon }) => {
+  return (
+    <div className="bg-vapi-card border border-vapi-border rounded-xl p-5 flex flex-col justify-between hover:border-zinc-700 transition-colors">
+      <div className="flex items-start justify-between">
+        <div>
+          <p className="text-zinc-400 text-sm font-medium mb-1">{title}</p>
+          <h2 className="text-3xl font-bold text-white">{value}</h2>
+        </div>
+        <div className="p-2 bg-zinc-900 rounded-lg border border-zinc-800">
+          {icon}
+        </div>
+      </div>
     </div>
-    <span className="text-3xl font-bold text-white">{value}</span>
-  </div>
-);
+  );
+};

@@ -90,15 +90,21 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, sel
           </div>
           <span className="text-xs text-vapi-accent font-mono">${selectedOrg.credits.toFixed(2)}</span>
         </div>
-        <div className="flex items-center gap-3 px-2 py-2 rounded-md hover:bg-zinc-900 cursor-pointer">
+        
+        {/* Logout Button */}
+        <div 
+            onClick={onBackToMaster}
+            className="flex items-center gap-3 px-2 py-2 rounded-md hover:bg-zinc-900 cursor-pointer group transition-colors"
+            title="Log Out / Switch Account"
+        >
           <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-xs font-bold text-white border border-indigo-500">
             MA
           </div>
           <div className="flex-1 overflow-hidden">
-            <p className="text-sm font-medium text-white truncate">Master Admin</p>
+            <p className="text-sm font-medium text-white truncate group-hover:text-zinc-200">Master Admin</p>
             <p className="text-xs text-zinc-500 truncate">admin@vapi.clone</p>
           </div>
-          <LogOut size={16} className="text-zinc-500 hover:text-white" />
+          <LogOut size={16} className="text-zinc-500 group-hover:text-white transition-colors" />
         </div>
       </div>
     </div>

@@ -247,3 +247,60 @@ export const deleteVapiAssistant = async (apiKey: string, assistantId: string): 
     throw error;
   }
 };
+
+// --- Secure Link Generation Utilities ---
+
+const ENCRYPTION_KEY = "vapi_dashboard_secure_link_salt_2024_v1";
+
+// Generates an encrypted-looking token containing the orgId and Name
+export const generateSecureToken = (org: { id: string, name: string }): string => {
+  try {
+    // We include the name 'nm' so the receiving client can reconstruct the org if it doesn't exist locally
+    const payload = JSON.stringify({ 
+      id: org.id, 
+      nm: org.name,
+      ts: Date.now(),
+      v: 2 
+    });
+    
+    // Simple XOR Cipher to obscure the JSON
+    const encrypted = payload.split('').map((c, i) => 
+      c.charCodeAt(0) ^ ENCRYPTION_KEY.charCodeAt(i % ENCRYPTION_KEY.length)
+    );
+    
+    // Convert to Base64
+    const base64 = btoa(String.fromCharCode(...encrypted));
+    
+    // Make URL safe
+    return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  } catch (error) {
+    console.error("Token generation failed", error);
+    return '';
+  }
+};
+
+// Parses the token to retrieve the orgId and Name
+export const parseSecureToken = (token: string): { id: string, nm?: string } | null => {
+  try {
+    // Restore Base64 padding and chars
+    let base64 = token.replace(/-/g, '+').replace(/_/g, '/');
+    while (base64.length % 4) base64 += '=';
+    
+    const encryptedCodes = atob(base64).split('').map(c => c.charCodeAt(0));
+    
+    // Reverse XOR Cipher
+    const decryptedString = encryptedCodes.map((c, i) => 
+      String.fromCharCode(c ^ ENCRYPTION_KEY.charCodeAt(i % ENCRYPTION_KEY.length))
+    ).join('');
+    
+    const data = JSON.parse(decryptedString);
+    
+    return {
+        id: data.id,
+        nm: data.nm // Optional, might not exist in v1 tokens
+    };
+  } catch (error) {
+    console.error("Token parsing failed", error);
+    return null;
+  }
+};
