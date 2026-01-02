@@ -172,6 +172,14 @@ export default function App() {
     setOrganizations(prev => [newOrg, ...prev]);
   };
 
+  const handleTransferAssistant = (assistant: Assistant, targetOrgId: string) => {
+    setAssistants(prev => prev.map(a => 
+        a.id === assistant.id 
+        ? { ...a, orgId: targetOrgId } 
+        : a
+    ));
+  };
+
   const handleBackToMaster = () => {
     setSelectedOrg(null);
   };
@@ -186,6 +194,7 @@ export default function App() {
             setAssistants={setAssistants}
             selectedOrgId={selectedOrg?.id || ''}
             selectedOrgName={selectedOrg?.name || ''}
+            organizations={organizations} // Passed for transfer functionality
           />
         );
       case 'logs': return <Logs />;
@@ -219,9 +228,11 @@ export default function App() {
     return (
       <MasterOverview 
         organizations={organizations}
+        assistants={assistants}
         onSelectOrg={handleSelectOrg}
         onUpdateOrg={handleUpdateOrg}
         onAddOrg={handleAddOrg}
+        onTransferAssistant={handleTransferAssistant}
       />
     );
   }

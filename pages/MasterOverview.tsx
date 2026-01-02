@@ -1,17 +1,26 @@
 import React, { useState } from 'react';
-import { Organization } from '../types';
-import { Building2, Plus, ArrowRight, DollarSign, Users, Activity, CreditCard, X, Link, Check, ClipboardCopy, Lock, Mail } from 'lucide-react';
+import { Organization, Assistant } from '../types';
+import { Building2, Plus, ArrowRight, DollarSign, Users, Activity, CreditCard, X, Link, Check, ClipboardCopy, Lock, Mail, Bot, Search, ArrowRightLeft } from 'lucide-react';
 import { generateSecureToken } from '../services/vapiService';
 import { supabaseService } from '../services/supabaseClient';
 
 interface MasterOverviewProps {
   organizations: Organization[];
+  assistants: Assistant[];
   onSelectOrg: (org: Organization) => void;
   onUpdateOrg: (org: Organization) => void;
   onAddOrg: (org: Organization) => void;
+  onTransferAssistant: (assistant: Assistant, targetOrgId: string) => void;
 }
 
-export const MasterOverview: React.FC<MasterOverviewProps> = ({ organizations, onSelectOrg, onUpdateOrg, onAddOrg }) => {
+export const MasterOverview: React.FC<MasterOverviewProps> = ({ 
+    organizations, 
+    assistants, 
+    onSelectOrg, 
+    onUpdateOrg, 
+    onAddOrg, 
+    onTransferAssistant 
+}) => {
   const [selectedOrgForCredit, setSelectedOrgForCredit] = useState<Organization | null>(null);
   const [creditAmount, setCreditAmount] = useState('');
   
@@ -23,6 +32,12 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({ organizations, o
   const [newOrgPlan, setNewOrgPlan] = useState<'trial' | 'pro' | 'enterprise'>('trial');
   const [isCreating, setIsCreating] = useState(false);
   
+  // Bots Modal State
+  const [showBotsModal, setShowBotsModal] = useState(false);
+  const [botSearch, setBotSearch] = useState('');
+  const [botToTransfer, setBotToTransfer] = useState<Assistant | null>(null);
+  const [targetOrgId, setTargetOrgId] = useState('');
+
   // Copy Link State
   const [copiedOrgId, setCopiedOrgId] = useState<string | null>(null);
   const [lastCopiedUrl, setLastCopiedUrl] = useState<string | null>(null);
@@ -89,6 +104,21 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({ organizations, o
     }
   };
 
+  const handleTransferSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (botToTransfer && targetOrgId) {
+        onTransferAssistant(botToTransfer, targetOrgId);
+        
+        // Show success logic (e.g. alert) if desired, or just close
+        const targetName = organizations.find(o => o.id === targetOrgId)?.name || 'target org';
+        // We do NOT alert here to keep flow smooth or alert if you prefer:
+        // alert(`Transferred ${botToTransfer.name} to ${targetName}`);
+
+        setBotToTransfer(null);
+        setTargetOrgId('');
+    }
+  };
+
   const copyOrgLink = (org: Organization) => {
     // Use the specific hosted URL for link generation
     const baseUrl = 'https://vapi-clone-ten.vercel.app';
@@ -107,6 +137,14 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({ organizations, o
         setLastCopiedUrl(null);
     }, 3000);
   };
+
+  const getOrgName = (id: string) => organizations.find(o => o.id === id)?.name || 'Unknown Org';
+
+  const filteredBots = assistants.filter(a => 
+    a.name.toLowerCase().includes(botSearch.toLowerCase()) || 
+    a.id.toLowerCase().includes(botSearch.toLowerCase()) ||
+    getOrgName(a.orgId).toLowerCase().includes(botSearch.toLowerCase())
+  );
 
   return (
     <div className="min-h-screen bg-vapi-bg p-8 font-sans animate-fade-in relative">
@@ -133,7 +171,7 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({ organizations, o
         </div>
 
         {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <StatCard 
             title="Total Revenue (Usage)" 
             value={`$${totalUsage.toFixed(2)}`} 
@@ -149,6 +187,14 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({ organizations, o
             value={organizations.filter(o => o.status === 'active').length.toString()} 
             icon={<Users size={20} className="text-purple-400"/>} 
           />
+          {/* Total Bots Card - Clickable */}
+          <div onClick={() => setShowBotsModal(true)} className="cursor-pointer group">
+            <StatCard 
+                title="Total Active Bots" 
+                value={assistants.length.toString()} 
+                icon={<Bot size={20} className="text-pink-400 group-hover:scale-110 transition-transform"/>} 
+            />
+          </div>
         </div>
 
         {/* Organizations List */}
@@ -401,13 +447,150 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({ organizations, o
           </div>
         </div>
       )}
+
+      {/* Bots List Modal */}
+      {showBotsModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-vapi-card border border-vapi-border rounded-xl w-full max-w-4xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+            <div className="flex items-center justify-between p-4 border-b border-vapi-border bg-zinc-900/50">
+              <div className="flex items-center gap-3">
+                  <div className="p-2 bg-pink-500/10 rounded-lg text-pink-500">
+                    <Bot size={20} />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-bold text-white">All Assistants</h3>
+                    <p className="text-xs text-zinc-400">Total: {assistants.length}</p>
+                  </div>
+              </div>
+              <button 
+                onClick={() => setShowBotsModal(false)}
+                className="text-zinc-500 hover:text-white transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-4 border-b border-vapi-border bg-zinc-900/20">
+                <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" size={16} />
+                    <input 
+                        type="text"
+                        value={botSearch}
+                        onChange={(e) => setBotSearch(e.target.value)}
+                        placeholder="Search by name, ID, or organization..."
+                        className="w-full bg-zinc-950 border border-zinc-700 rounded-lg pl-9 pr-4 py-2 text-sm text-white focus:outline-none focus:border-vapi-accent"
+                    />
+                </div>
+            </div>
+
+            <div className="overflow-y-auto flex-1 p-0">
+               <table className="w-full text-left border-collapse">
+                    <thead className="sticky top-0 bg-zinc-900/90 backdrop-blur-sm z-10">
+                        <tr className="border-b border-zinc-800 text-xs text-zinc-500 uppercase tracking-wider">
+                            <th className="px-6 py-3 font-medium">Assistant Name</th>
+                            <th className="px-6 py-3 font-medium">Organization</th>
+                            <th className="px-6 py-3 font-medium text-right">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-800/50 text-sm">
+                        {filteredBots.map(bot => (
+                            <tr key={bot.id} className="group hover:bg-zinc-800/50 transition-colors">
+                                <td className="px-6 py-3">
+                                    <div className="font-medium text-white">{bot.name}</div>
+                                    <div className="text-[10px] text-zinc-500 font-mono">{bot.id}</div>
+                                </td>
+                                <td className="px-6 py-3">
+                                    <span className="inline-flex items-center px-2 py-1 rounded bg-zinc-800 border border-zinc-700 text-xs text-zinc-300">
+                                        <Building2 size={10} className="mr-1.5 opacity-60"/>
+                                        {getOrgName(bot.orgId)}
+                                    </span>
+                                </td>
+                                <td className="px-6 py-3 text-right">
+                                    <button 
+                                        onClick={() => setBotToTransfer(bot)}
+                                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-indigo-500/10 text-zinc-400 hover:text-indigo-400 text-xs font-medium rounded-lg transition-colors border border-zinc-700 hover:border-indigo-500/30"
+                                    >
+                                        <ArrowRightLeft size={12} />
+                                        Transfer
+                                    </button>
+                                </td>
+                            </tr>
+                        ))}
+                        {filteredBots.length === 0 && (
+                            <tr>
+                                <td colSpan={3} className="px-6 py-8 text-center text-zinc-500">
+                                    No assistants found.
+                                </td>
+                            </tr>
+                        )}
+                    </tbody>
+               </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Transfer Bot Modal */}
+      {botToTransfer && (
+        <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
+           <div className="bg-vapi-card border border-vapi-border rounded-xl w-full max-w-sm shadow-2xl p-6">
+              <div className="flex items-center gap-3 mb-4 text-white">
+                <div className="p-3 bg-indigo-500/10 rounded-full text-indigo-400">
+                   <ArrowRightLeft size={24} />
+                </div>
+                <h3 className="text-lg font-bold">Transfer Assistant</h3>
+              </div>
+              
+              <div className="mb-6">
+                  <p className="text-zinc-400 text-sm mb-4">
+                    Move <span className="text-white font-medium">{botToTransfer.name}</span> from <span className="text-zinc-300">{getOrgName(botToTransfer.orgId)}</span>?
+                  </p>
+                  
+                  <label className="block text-xs font-medium text-zinc-500 mb-2 uppercase tracking-wide">Destination Organization</label>
+                  <div className="relative">
+                      <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" size={16} />
+                      <select
+                          value={targetOrgId}
+                          onChange={(e) => setTargetOrgId(e.target.value)}
+                          className="w-full bg-zinc-950 border border-zinc-700 rounded-lg pl-10 pr-4 py-3 text-sm text-white focus:outline-none focus:border-vapi-accent appearance-none cursor-pointer"
+                      >
+                          <option value="">Select an organization...</option>
+                          {organizations
+                              .filter(org => org.id !== botToTransfer.orgId) // Exclude current org
+                              .map(org => (
+                                  <option key={org.id} value={org.id}>{org.name}</option>
+                              ))
+                          }
+                      </select>
+                  </div>
+              </div>
+
+              <div className="flex justify-end gap-3">
+                <button 
+                  onClick={() => { setBotToTransfer(null); setTargetOrgId(''); }}
+                  className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg font-medium transition-colors"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={handleTransferSubmit}
+                  disabled={!targetOrgId}
+                  className="px-4 py-2 bg-vapi-accent hover:bg-teal-300 text-black rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Confirm Transfer
+                </button>
+              </div>
+           </div>
+        </div>
+      )}
+
     </div>
   );
 };
 
 const StatCard: React.FC<{ title: string; value: string; icon: React.ReactNode }> = ({ title, value, icon }) => {
   return (
-    <div className="bg-vapi-card border border-vapi-border rounded-xl p-5 flex flex-col justify-between hover:border-zinc-700 transition-colors">
+    <div className="bg-vapi-card border border-vapi-border rounded-xl p-5 flex flex-col justify-between hover:border-zinc-700 transition-colors h-full">
       <div className="flex items-start justify-between">
         <div>
           <p className="text-zinc-400 text-sm font-medium mb-1">{title}</p>

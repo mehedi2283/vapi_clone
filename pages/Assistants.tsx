@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Assistant, ChatMessage } from '../types';
-import { Plus, Search, MoreHorizontal, MessageSquare, Save, Play, Mic, Terminal, Sparkles, X, ChevronLeft, Volume2, Phone, Loader2, Key, Trash2, AlertTriangle, Edit, Trash } from 'lucide-react';
+import { Assistant, ChatMessage, Organization } from '../types';
+import { Plus, Search, MoreHorizontal, MessageSquare, Save, Play, Mic, Terminal, Sparkles, X, ChevronLeft, Volume2, Phone, Loader2, Key, Trash2, AlertTriangle, Edit, Trash, ArrowRightLeft, Building2 } from 'lucide-react';
 import { generateSystemPrompt, chatWithAssistant, generateSpeech } from '../services/geminiService';
 import { createVapiAssistant, updateVapiAssistant, deleteVapiAssistant } from '../services/vapiService';
 import { VAPI_PRIVATE_KEY } from '../constants';
@@ -16,9 +16,10 @@ interface AssistantsProps {
   setAssistants: React.Dispatch<React.SetStateAction<Assistant[]>>;
   selectedOrgId: string;
   selectedOrgName: string;
+  organizations: Organization[];
 }
 
-export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistants, selectedOrgId, selectedOrgName }) => {
+export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistants, selectedOrgId, selectedOrgName, organizations }) => {
   // Filter assistants for the current organization
   const filteredAssistants = assistants.filter(a => a.orgId === selectedOrgId);
   
@@ -32,6 +33,11 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
 
   // Deletion State
   const [assistantToDelete, setAssistantToDelete] = useState<Assistant | null>(null);
+  
+  // Transfer State
+  const [showTransferModal, setShowTransferModal] = useState(false);
+  const [assistantToTransfer, setAssistantToTransfer] = useState<Assistant | null>(null);
+  const [targetOrgId, setTargetOrgId] = useState('');
 
   // UI State
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
@@ -231,6 +237,35 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
     setAssistantToDelete(assistant);
     setShowDeleteConfirm(true);
   };
+  
+  const handleTransferClick = (assistant: Assistant, e?: React.MouseEvent) => {
+    if (e) {
+        e.stopPropagation();
+        e.preventDefault();
+    }
+    setAssistantToTransfer(assistant);
+    setTargetOrgId(''); // Reset selection
+    setShowTransferModal(true);
+  };
+
+  const confirmTransfer = () => {
+    if (!assistantToTransfer || !targetOrgId) return;
+
+    // In a real scenario, this might call an API endpoint to move the assistant
+    // Here we update the local state to "move" it to another Org ID
+    setAssistants(prev => prev.map(a => 
+        a.id === assistantToTransfer.id 
+        ? { ...a, orgId: targetOrgId } 
+        : a
+    ));
+
+    const targetOrgName = organizations.find(o => o.id === targetOrgId)?.name || 'target organization';
+    alert(`Assistant "${assistantToTransfer.name}" transferred to ${targetOrgName}.`);
+    
+    setShowTransferModal(false);
+    setAssistantToTransfer(null);
+    setTargetOrgId('');
+  };
 
   const handleConfirmDelete = async () => {
     setShowDeleteConfirm(false);
@@ -264,12 +299,13 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
           onBack={handleBack}
           onSave={handleSaveClick}
           onDelete={(e) => handleDeleteClick(editedAssistant, e)}
+          onTransfer={() => handleTransferClick(editedAssistant)}
           hasChanges={hasUnsavedChanges}
           isSaving={isSaving}
           orgName={selectedOrgName}
         />
         
-        {/* Delete Confirmation Modal */}
+        {/* Delete Confirmation Modal (Reusable for Editor) */}
         {showDeleteConfirm && assistantToDelete && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
              <div className="bg-vapi-card border border-vapi-border rounded-xl w-full max-w-sm shadow-2xl p-6 border-red-500/20">
@@ -299,6 +335,60 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
                 </div>
              </div>
           </div>
+        )}
+
+        {/* Transfer Assistant Modal (For Editor Context) */}
+        {showTransferModal && assistantToTransfer && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
+            <div className="bg-vapi-card border border-vapi-border rounded-xl w-full max-w-sm shadow-2xl p-6">
+                <div className="flex items-center gap-3 mb-4 text-white">
+                    <div className="p-3 bg-indigo-500/10 rounded-full text-indigo-400">
+                    <ArrowRightLeft size={24} />
+                    </div>
+                    <h3 className="text-lg font-bold">Transfer Assistant</h3>
+                </div>
+                
+                <div className="mb-6">
+                    <p className="text-zinc-400 text-sm mb-4">
+                        Move <span className="text-white font-medium">{assistantToTransfer.name}</span> to another organization?
+                    </p>
+                    
+                    <label className="block text-xs font-medium text-zinc-500 mb-2 uppercase tracking-wide">Destination Organization</label>
+                    <div className="relative">
+                        <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" size={16} />
+                        <select
+                            value={targetOrgId}
+                            onChange={(e) => setTargetOrgId(e.target.value)}
+                            className="w-full bg-zinc-950 border border-zinc-700 rounded-lg pl-10 pr-4 py-3 text-sm text-white focus:outline-none focus:border-vapi-accent appearance-none cursor-pointer"
+                        >
+                            <option value="">Select an organization...</option>
+                            {organizations
+                                .filter(org => org.id !== selectedOrgId) // Exclude current org
+                                .map(org => (
+                                    <option key={org.id} value={org.id}>{org.name}</option>
+                                ))
+                            }
+                        </select>
+                    </div>
+                </div>
+
+                <div className="flex justify-end gap-3">
+                    <button 
+                    onClick={() => { setShowTransferModal(false); setAssistantToTransfer(null); setTargetOrgId(''); }}
+                    className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg font-medium transition-colors"
+                    >
+                    Cancel
+                    </button>
+                    <button 
+                    onClick={confirmTransfer}
+                    disabled={!targetOrgId}
+                    className="px-4 py-2 bg-vapi-accent hover:bg-teal-300 text-black rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                    Confirm Transfer
+                    </button>
+                </div>
+            </div>
+            </div>
         )}
 
         {/* API Key Modal */}
@@ -390,8 +480,21 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
               <div className="flex justify-between items-start mb-2 pl-3 relative">
                 <h3 className="text-base font-semibold text-white pr-8 truncate">{asst.name}</h3>
                 
-                {/* 3-Dot Menu Button */}
-                <div className="absolute right-0 top-0 z-20">
+                {/* Actions: Transfer & Menu */}
+                <div className="absolute right-0 top-0 z-20 flex items-center">
+                    {/* Direct Transfer Button (Visible on Hover) */}
+                    <button 
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            handleTransferClick(asst);
+                        }}
+                        className="text-zinc-500 hover:text-white p-1 rounded-md hover:bg-zinc-800 transition-colors mr-1 opacity-0 group-hover:opacity-100"
+                        title="Transfer Assistant"
+                    >
+                        <ArrowRightLeft size={18} />
+                    </button>
+
+                    {/* Menu Button */}
                     <button 
                         onClick={(e) => {
                             e.stopPropagation();
@@ -404,7 +507,7 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
                     
                     {/* Dropdown Menu */}
                     {activeDropdown === asst.id && (
-                        <div className="absolute right-0 top-full mt-1 w-40 bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl z-30 overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right">
+                        <div className="absolute right-0 top-full mt-1 w-48 bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl z-30 overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right">
                             <button 
                                 onClick={(e) => {
                                     e.stopPropagation();
@@ -415,6 +518,17 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
                             >
                                 <Edit size={14} />
                                 Edit Bot
+                            </button>
+                             <button 
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    setActiveDropdown(null);
+                                    handleTransferClick(asst);
+                                }}
+                                className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-white transition-colors text-left cursor-pointer border-t border-zinc-800"
+                            >
+                                <ArrowRightLeft size={14} />
+                                Transfer to Org
                             </button>
                             <button 
                                 onClick={(e) => {
@@ -446,6 +560,60 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
           ))
         )}
       </div>
+
+      {/* Transfer Assistant Modal (For List View Context) */}
+      {showTransferModal && assistantToTransfer && !editedAssistant && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
+           <div className="bg-vapi-card border border-vapi-border rounded-xl w-full max-w-sm shadow-2xl p-6">
+              <div className="flex items-center gap-3 mb-4 text-white">
+                <div className="p-3 bg-indigo-500/10 rounded-full text-indigo-400">
+                   <ArrowRightLeft size={24} />
+                </div>
+                <h3 className="text-lg font-bold">Transfer Assistant</h3>
+              </div>
+              
+              <div className="mb-6">
+                  <p className="text-zinc-400 text-sm mb-4">
+                    Move <span className="text-white font-medium">{assistantToTransfer.name}</span> to another organization?
+                  </p>
+                  
+                  <label className="block text-xs font-medium text-zinc-500 mb-2 uppercase tracking-wide">Destination Organization</label>
+                  <div className="relative">
+                      <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" size={16} />
+                      <select
+                          value={targetOrgId}
+                          onChange={(e) => setTargetOrgId(e.target.value)}
+                          className="w-full bg-zinc-950 border border-zinc-700 rounded-lg pl-10 pr-4 py-3 text-sm text-white focus:outline-none focus:border-vapi-accent appearance-none cursor-pointer"
+                      >
+                          <option value="">Select an organization...</option>
+                          {organizations
+                              .filter(org => org.id !== selectedOrgId) // Exclude current org
+                              .map(org => (
+                                  <option key={org.id} value={org.id}>{org.name}</option>
+                              ))
+                          }
+                      </select>
+                  </div>
+              </div>
+
+              <div className="flex justify-end gap-3">
+                <button 
+                  onClick={() => { setShowTransferModal(false); setAssistantToTransfer(null); setTargetOrgId(''); }}
+                  className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg font-medium transition-colors"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={confirmTransfer}
+                  disabled={!targetOrgId}
+                  className="px-4 py-2 bg-vapi-accent hover:bg-teal-300 text-black rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Confirm Transfer
+                </button>
+              </div>
+           </div>
+        </div>
+      )}
 
       {/* Re-render Delete Modal for List View context */}
       {showDeleteConfirm && assistantToDelete && (
@@ -532,10 +700,11 @@ const AssistantEditor: React.FC<{
   onBack: () => void;
   onSave: () => void;
   onDelete: (e?: React.MouseEvent) => void;
+  onTransfer: () => void;
   hasChanges: boolean;
   isSaving: boolean;
   orgName: string;
-}> = ({ assistant, onChange, onBack, onSave, onDelete, hasChanges, isSaving, orgName }) => {
+}> = ({ assistant, onChange, onBack, onSave, onDelete, onTransfer, hasChanges, isSaving, orgName }) => {
   const [activeTab, setActiveTab] = useState<'model' | 'voice' | 'transcriber'>('model');
   const [promptGoal, setPromptGoal] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
@@ -648,6 +817,17 @@ const AssistantEditor: React.FC<{
           >
             {isSaving ? <Loader2 size={18} className="animate-spin" /> : <Trash2 size={18} />}
           </button>
+          
+           {/* Header Transfer Button */}
+           <button 
+            type="button"
+            onClick={onTransfer}
+            className="p-2.5 rounded-lg text-indigo-400 hover:bg-indigo-500/10 transition-colors"
+            title="Transfer Assistant"
+          >
+            <ArrowRightLeft size={18} />
+          </button>
+
           <div className="h-8 w-[1px] bg-zinc-800 mx-1"></div>
           <button 
             type="button"
