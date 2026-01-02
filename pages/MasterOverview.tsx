@@ -114,7 +114,7 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
       id: newId, 
       name: newOrgName,
       email: newOrgEmail,
-      role: 'admin',
+      role: 'user', // Default strictly to 'user'
       plan: newOrgPlan,
       credits: 10.00,
       usageCost: 0.00,
@@ -265,6 +265,7 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
                 <thead>
                   <tr className="bg-zinc-900/50 border-b border-zinc-800 text-xs text-zinc-500 uppercase tracking-wider">
                     <th className="px-6 py-4 font-medium">Organization</th>
+                    <th className="px-6 py-4 font-medium">Role</th>
                     <th className="px-6 py-4 font-medium">Plan</th>
                     <th className="px-6 py-4 font-medium">Credits</th>
                     <th className="px-6 py-4 font-medium">Status</th>
@@ -275,11 +276,26 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
                   {currentOrgs.map(org => (
                     <tr key={org.id} className="group hover:bg-zinc-900/40 transition-colors">
                       <td className="px-6 py-4">
-                        <div className="flex flex-col">
-                          <span className="text-white font-medium">{org.name}</span>
+                        <div className="flex flex-col gap-1">
+                          <div className="flex items-center gap-2">
+                             <span className="text-white font-medium">{org.name}</span>
+                          </div>
                           {org.email && <span className="text-zinc-500 text-xs">{org.email}</span>}
                           <span className="text-zinc-600 text-[10px] font-mono">{org.id.substring(0, 10)}...</span>
                         </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        {org.role === 'admin' ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-amber-500/10 text-amber-500 border border-amber-500/20">
+                                <Shield size={12} className="fill-amber-500/20" />
+                                Admin
+                            </span>
+                        ) : (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-zinc-800 text-zinc-400 border border-zinc-700">
+                                <User size={12} />
+                                User
+                            </span>
+                        )}
                       </td>
                       <td className="px-6 py-4">
                         <button 
@@ -306,37 +322,42 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
                       </td>
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end gap-2">
+                           {/* COPY LINK BUTTON */}
                            <button 
                             onClick={() => copyOrgLink(org)}
-                            className={`inline-flex items-center justify-center p-1.5 rounded-lg transition-colors border ${
+                            className={`p-2 rounded-lg transition-colors border ${
                               copiedOrgId === org.id 
                               ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' 
-                              : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white border-zinc-700 group-hover:border-zinc-600'
+                              : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white border-zinc-700'
                             }`}
                             title="Copy Magic Login Link"
                           >
-                            {copiedOrgId === org.id ? <Check size={14} /> : <Link size={14} />}
+                            {copiedOrgId === org.id ? <Check size={16} /> : <Link size={16} />}
                           </button>
+
+                          {/* ADD CREDIT BUTTON */}
                           <button 
                             onClick={() => setSelectedOrgForCredit(org)}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white text-xs font-medium rounded-lg transition-colors border border-zinc-700 group-hover:border-zinc-600"
+                            className="flex items-center gap-2 px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white text-xs font-medium rounded-lg transition-colors border border-zinc-700"
                             title="Add Credits"
                           >
                             <CreditCard size={14} />
                             Add Credit
                           </button>
+
+                          {/* MANAGE BUTTON (TEAL) */}
                           <button 
                             onClick={() => onSelectOrg(org)}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-vapi-accent text-black hover:bg-teal-300 text-xs font-medium rounded-lg transition-colors"
+                            className="flex items-center gap-2 px-3 py-2 bg-vapi-accent hover:bg-teal-300 text-black text-xs font-bold rounded-lg transition-colors"
                           >
-                            Manage <ArrowRight size={12} />
+                            Manage <ArrowRight size={14} />
                           </button>
                           
                           {/* DELETE BUTTON */}
                           <div className="w-px h-6 bg-zinc-800 mx-1"></div>
                           <button
                             onClick={() => handleDeleteClick(org)}
-                            className="p-1.5 text-zinc-500 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors"
+                            className="p-2 text-zinc-500 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors"
                             title="Delete Organization"
                           >
                             <Trash2 size={16} />
