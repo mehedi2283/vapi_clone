@@ -64,7 +64,7 @@ export const Tools: React.FC<ToolsProps> = ({ orgId }) => {
         <button 
           onClick={handleCreate}
           disabled={isCreating}
-          className="flex items-center gap-2 bg-vapi-accent hover:bg-teal-300 text-black px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
+          className="flex items-center gap-2 bg-vapi-accent hover:bg-orange-500 text-black px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
         >
           {isCreating ? <Loader2 size={18} className="animate-spin"/> : <Plus size={18} />}
           <span>Create Tool</span>

@@ -106,7 +106,7 @@ export const Files: React.FC<FilesProps> = ({ orgId }) => {
         <button 
             onClick={handleManualUpload}
             disabled={isUploading}
-            className="flex items-center gap-2 bg-vapi-accent hover:bg-teal-300 text-black px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 bg-vapi-accent hover:bg-orange-500 text-black px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
         >
           {isUploading ? <Loader2 size={18} className="animate-spin"/> : <Upload size={18} />}
           <span>Upload File</span>

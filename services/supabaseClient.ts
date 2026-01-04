@@ -1,420 +1,380 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Organization, FileItem, ToolItem } from '../types';
-import { MOCK_ORGS, MOCK_FILES, MOCK_TOOLS } from '../constants';
 
-// Supabase Credentials
-const SUPABASE_URL = 'https://tlglequivxzlekjrbjvq.supabase.co';
-const SUPABASE_KEY = 'sb_publishable_7nq3imUdgiB8RmSvdI7ggA_mnVus3vv';
+// Storage keys for runtime configuration
+const STORE_URL = 'vapi_sb_url';
+const STORE_KEY = 'vapi_sb_key';
 
-// Initialize client
-// Note: We're initializing it even if keys look weird to try, but we'll catch failures.
-export const supabase = (SUPABASE_URL && SUPABASE_KEY) 
-  ? createClient(SUPABASE_URL, SUPABASE_KEY) 
-  : null;
+class SupabaseService {
+  private supabase: SupabaseClient | null = null;
+  private sbUrl: string = '';
+  private sbKey: string = '';
 
-// Mock Fallback Data for Auth
-const MOCK_USER = {
-    id: 'user_mock_123',
-    email: 'admin@vapi.clone',
-    role: 'authenticated'
-};
+  constructor() {
+    this.initClient();
+  }
 
-const MOCK_SESSION = {
-    access_token: 'mock_token',
-    refresh_token: 'mock_refresh',
-    expires_in: 3600,
-    user: MOCK_USER
-};
-
-// Custom event to notify App.tsx of auth changes if Supabase auth fails
-export const authStateChanged = new EventTarget();
-
-export const supabaseService = {
-  // --- AUTH ---
-  async signIn(email: string, password: string) {
-    if (!supabase) throw new Error("Supabase client not initialized");
+  private initClient() {
+    // Try environment variables first (if built), then local storage (runtime)
+    const envUrl = process.env.SUPABASE_URL;
+    const envKey = process.env.SUPABASE_ANON_KEY;
     
-    try {
-        const { data, error } = await supabase.auth.signInWithPassword({
-            email,
-            password,
-        });
-        
-        if (error) throw error;
-        return data;
-    } catch (error: any) {
-        // FALLBACK: If network/fetch fails, allow demo login
-        if (error.message?.includes('Failed to fetch') || error.message?.includes('NetworkError') || !SUPABASE_KEY.startsWith('ey')) {
-            console.warn("Auth network error, falling back to Demo Mode.");
-            localStorage.setItem('vapi_demo_session', JSON.stringify(MOCK_SESSION));
-            // Dispatch event so App.tsx can react if it's listening to this mechanism
-            authStateChanged.dispatchEvent(new Event('signedIn'));
-            return { session: MOCK_SESSION, user: MOCK_USER };
+    const localUrl = localStorage.getItem(STORE_URL);
+    const localKey = localStorage.getItem(STORE_KEY);
+
+    const url = (envUrl || localUrl || '').trim();
+    const key = (envKey || localKey || '').trim();
+
+    if (url && key) {
+        // Basic validation to prevent crash
+        if (!url.startsWith('http://') && !url.startsWith('https://')) {
+            console.warn("Skipping Supabase init: URL must start with http:// or https://");
+            return;
         }
-        throw new Error(error.message || 'SignIn Failed');
-    }
-  },
 
-  async signUp(email: string, password: string) {
-    if (!supabase) throw new Error("Supabase client not initialized");
-    
-    try {
-        const { data, error } = await supabase.auth.signUp({
-            email,
-            password,
-            options: { data: { role: 'user' } }
-        });
-        if (error) throw error;
-        return data;
-    } catch (error: any) {
-         if (error.message?.includes('Failed to fetch') || !SUPABASE_KEY.startsWith('ey')) {
-            console.warn("Auth network error (SignUp), falling back to Demo Mode.");
-            const demoUser = { ...MOCK_USER, email: email, id: `user_${Date.now()}` };
-            const demoSession = { ...MOCK_SESSION, user: demoUser };
-            localStorage.setItem('vapi_demo_session', JSON.stringify(demoSession));
-            authStateChanged.dispatchEvent(new Event('signedIn'));
-            return { session: demoSession, user: demoUser };
-         }
-         throw new Error(error.message || 'SignUp Failed');
-    }
-  },
-
-  async signOut() {
-    // Clear demo session
-    localStorage.removeItem('vapi_demo_session');
-    
-    if (supabase) {
         try {
-            await supabase.auth.signOut();
-        } catch (e) { console.warn("Supabase SignOut failed, ignoring."); }
+            this.sbUrl = url;
+            this.sbKey = key;
+            this.supabase = createClient(url, key);
+        } catch (e) {
+            console.error("Failed to initialize Supabase client", e);
+            this.supabase = null;
+        }
     }
-    authStateChanged.dispatchEvent(new Event('signedOut'));
-  },
+  }
+
+  public isConfigured(): boolean {
+      return !!this.supabase;
+  }
+
+  public setConfig(url: string, key: string) {
+      if (!url || !key) return;
+      localStorage.setItem(STORE_URL, url.trim());
+      localStorage.setItem(STORE_KEY, key.trim());
+      // Re-initialize
+      this.initClient();
+  }
+
+  public clearConfig() {
+      localStorage.removeItem(STORE_URL);
+      localStorage.removeItem(STORE_KEY);
+      this.supabase = null;
+      this.sbUrl = '';
+      this.sbKey = '';
+  }
+
+  private checkClient() {
+      if (!this.supabase) throw new Error("Supabase not configured. Click the gear icon to set up your connection.");
+  }
+
+  // --- Auth Methods ---
 
   async getCurrentUser() {
-    // Check demo first
-    const demoSession = localStorage.getItem('vapi_demo_session');
-    if (demoSession) {
-        return JSON.parse(demoSession).user;
-    }
-
-    if (!supabase) return null;
+    if (!this.supabase) return null;
     try {
-        const { data: { session } } = await supabase.auth.getSession();
-        return session?.user || null;
+        const { data: { session } } = await this.supabase.auth.getSession();
+        return session?.user ? { id: session.user.id, email: session.user.email! } : null;
     } catch (e) {
+        // If session check fails (e.g. invalid key), treat as logged out
+        console.warn("Session check failed", e);
         return null;
     }
-  },
+  }
 
-  // --- ORGANIZATIONS ---
-  async getOrganizations(userId?: string): Promise<Organization[]> {
-    if (!supabase) return MOCK_ORGS;
-    try {
-      let query = supabase
-        .from('organizations')
-        .select('*')
-        .order('created_at', { ascending: false });
-      
-      if (userId && !userId.startsWith('user_mock') && !userId.startsWith('user_')) {
-        query = query.eq('id', userId); 
+  onAuthStateChange(callback: (event: string, session: { user: any } | null) => void) {
+      if (!this.supabase) {
+          return { data: { subscription: { unsubscribe: () => {} } } };
+      }
+      const { data } = this.supabase.auth.onAuthStateChange((event, session) => {
+          const mappedSession = session?.user ? { user: { id: session.user.id, email: session.user.email! } } : null;
+          callback(event, mappedSession);
+      });
+      return { data };
+  }
+
+  async signIn(email: string, password: string): Promise<void> {
+    this.checkClient();
+    const { error } = await this.supabase!.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+  }
+
+  async signOut(): Promise<void> {
+    this.checkClient();
+    const { error } = await this.supabase!.auth.signOut();
+    if (error) throw error;
+  }
+
+  async signUp(email: string, password: string, metaData?: any): Promise<{ user: { id: string } | null }> {
+    this.checkClient();
+    const { data, error } = await this.supabase!.auth.signUp({ 
+        email, 
+        password,
+        options: {
+            data: metaData
+        }
+    });
+    if (error) throw error;
+    return { user: data.user ? { id: data.user.id } : null };
+  }
+
+  // Create a user without logging the current user out (Isolated Client)
+  async createIsolatedUser(email: string, password: string, metaData?: any): Promise<{ user: { id: string } | null, error: any }> {
+      // Use stored credentials instead of inspecting the instance
+      if (!this.sbUrl || !this.sbKey) {
+          return { user: null, error: new Error("Supabase credentials missing") };
       }
 
-      const { data, error } = await query;
+      try {
+          const tempClient = createClient(this.sbUrl, this.sbKey, {
+              auth: {
+                  persistSession: false, 
+                  autoRefreshToken: false,
+                  detectSessionInUrl: false
+              }
+          });
 
-      if (error) throw error;
+          const { data, error } = await tempClient.auth.signUp({
+              email,
+              password,
+              options: {
+                  data: metaData
+              }
+          });
+          
+          return { user: data.user ? { id: data.user.id } : null, error };
+      } catch (e) {
+          return { user: null, error: e };
+      }
+  }
 
-      return data.map((org: any) => ({
-        id: org.id,
-        name: org.name,
-        email: org.email,
-        role: org.role || 'user',
-        plan: org.plan,
-        credits: Number(org.credits),
-        usageCost: Number(org.usage_cost || org.usageCost || 0),
-        status: org.status,
-        createdAt: org.created_at || org.createdAt
-      }));
-    } catch (error: any) {
-      console.warn("Fetching organizations failed (Network/CORS), using mocks.", error.message);
-      // Filter mocks for demo user if needed, or return all for demo
-      return MOCK_ORGS;
-    }
-  },
+  async updateUserPassword(password: string): Promise<void> {
+    this.checkClient();
+    const { error } = await this.supabase!.auth.updateUser({ password });
+    if (error) throw error;
+  }
+
+  // --- Data Methods (Real DB) ---
 
   async getOrganizationByEmail(email: string): Promise<Organization | null> {
-    // Check mocks first
-    const mock = MOCK_ORGS.find(o => o.email === email);
-    if (mock) return mock;
-
-    if (!supabase) return null;
-    try {
-      const { data, error } = await supabase
+    if (!this.supabase) return null;
+    
+    const { data, error } = await this.supabase
         .from('organizations')
         .select('*')
         .eq('email', email)
-        .maybeSingle();
-
-      if (error) throw error;
-      if (!data) return null;
-
-      return {
-        id: data.id,
-        name: data.name,
-        email: data.email,
-        role: data.role || 'user',
-        plan: data.plan,
-        credits: Number(data.credits),
-        usageCost: Number(data.usage_cost || 0),
-        status: data.status,
-        createdAt: data.created_at
-      };
-    } catch (error: any) {
-      console.warn("getOrganizationByEmail failed, ignoring.");
-      return null;
-    }
-  },
-
-  async createOrganization(org: Organization, password?: string): Promise<Organization | null> {
-    // Mock for demo
-    if (localStorage.getItem('vapi_demo_session')) {
-        return org;
-    }
-
-    if (!supabase) return org;
+        .single();
     
-    let finalOrgId = org.id;
-
-    // 1. Create Auth User if password is provided
-    if (password && org.email) {
-        // IMPORTANT: We use a separate client instance here with persistSession: false.
-        // This prevents the new user's session from overwriting the current Admin session in localStorage.
-        // We also provide a dummy storage to prevent "Multiple GoTrueClient instances" warnings.
-        const tempClient = createClient(SUPABASE_URL, SUPABASE_KEY, {
-            auth: {
-                persistSession: false,
-                autoRefreshToken: false,
-                detectSessionInUrl: false,
-                storage: {
-                    getItem: () => null,
-                    setItem: () => {},
-                    removeItem: () => {},
-                }
-            }
-        });
-
-        try {
-            const { data: authData, error: authError } = await tempClient.auth.signUp({
-                email: org.email,
-                password: password,
-                options: {
-                    data: { role: org.role || 'user' } // Store role in user metadata
-                }
-            });
-
-            if (authError) {
-                console.error("Auth creation error:", authError);
-                throw new Error(`Auth User Creation Failed: ${authError.message}`);
-            }
-
-            if (authData.user) {
-                // Use the REAL Auth ID for the organization ID
-                finalOrgId = authData.user.id;
-            }
-            
-            // Explicitly sign out the temp client to ensure no session leakage
-            await tempClient.auth.signOut();
-
-        } catch (e: any) {
-            console.error("Failed to create auth user:", e);
-            // We'll proceed with creating the org record, but warn the admin?
-            // For now, we assume we might want to continue or throw. 
-            // Let's throw so the UI knows the user wasn't created.
-            throw e; 
-        }
+    if (error) {
+        if (error.code !== 'PGRST116') console.error("Error fetching org:", error.message);
+        return null;
     }
-    
-    // 2. Create Organization Record
-    const basePayload = {
-        id: finalOrgId,
-        name: org.name,
-        email: org.email,
-        // Storing password here is NOT secure but matches the requested behavior for this clone
-        password: password || 'managed_by_auth_v1', 
-        plan: org.plan,
-        credits: org.credits,
-        usage_cost: org.usageCost,
-        status: org.status,
-        created_at: org.createdAt
-    };
+    return data as Organization;
+  }
 
-    try {
-      const { data, error } = await supabase
+  async getOrganizationById(id: string): Promise<Organization | null> {
+    if (!this.supabase) return null;
+    
+    const { data, error } = await this.supabase
         .from('organizations')
-        .insert([{ ...basePayload, role: org.role || 'user' }])
+        .select('*')
+        .eq('id', id)
+        .single();
+    
+    if (error) {
+        // console.error("Error fetching org by ID:", error);
+        return null;
+    }
+    return data as Organization;
+  }
+
+  // Fetch all organizations accessible to the current user (Own + Shared)
+  async getUserOrganizations(): Promise<Organization[]> {
+      if (!this.supabase) return [];
+      
+      // Rely on RLS: SELECT * FROM organizations will return 
+      // 1. Orgs owned by user (id = auth.uid())
+      // 2. Orgs where user is in 'members' array (via policy)
+      const { data, error } = await this.supabase
+          .from('organizations')
+          .select('*')
+          .order('name');
+          
+      if (error) {
+          console.error("Error fetching user orgs:", error.message);
+          return [];
+      }
+      return data as Organization[];
+  }
+
+  async getAllOrganizations(): Promise<Organization[]> {
+    if (!this.supabase) return [];
+    
+    const { data, error } = await this.supabase
+        .from('organizations')
+        .select('*')
+        .order('created_at', { ascending: false });
+        
+    if (error) {
+        console.error("Error fetching all orgs:", error.message);
+        return [];
+    }
+    return data as Organization[];
+  }
+
+  async createOrganization(org: Organization, password?: string): Promise<Organization> {
+    this.checkClient();
+    
+    // Merge password into the payload if provided
+    const payload: any = { ...org };
+    if (password) {
+        payload.password = password;
+    }
+
+    const { data, error } = await this.supabase!
+        .from('organizations')
+        .insert([payload])
         .select()
         .single();
 
+    if (error) throw error;
+    return data as Organization;
+  }
+
+  async updateOrganization(org: Partial<Organization> & { id: string }): Promise<void> {
+    this.checkClient();
+    
+    // Destructure ID to ensure we don't try to update the Primary Key
+    // This allows passing the full object safely.
+    const { id, ...updates } = org;
+    
+    const { error } = await this.supabase!
+        .from('organizations')
+        .update(updates)
+        .eq('id', id);
+    
+    if (error) throw error;
+  }
+
+  async deleteMember(emailToDelete: string, orgId: string): Promise<void> {
+      this.checkClient();
+      // Call the Postgres RPC function
+      const { error } = await this.supabase!.rpc('delete_team_member', {
+          target_email: emailToDelete,
+          org_id: orgId
+      });
+
       if (error) throw error;
-      return { ...org, id: finalOrgId, ...data }; 
+  }
 
-    } catch (error: any) {
-      // Handle potential "role column does not exist" in older schemas
-      const isColumnMissing = error.message?.includes('column "role"') || error.code === '42703';
-      if (isColumnMissing) {
-          const { data } = await supabase.from('organizations').insert([basePayload]).select().single();
-          return { ...org, id: finalOrgId, ...data, role: 'user' };
-      }
-      
-      console.error("Error creating organization record:", error.message || error);
-      throw error;
-    }
-  },
-
-  async updateOrganization(org: Organization): Promise<void> {
-    if (localStorage.getItem('vapi_demo_session') || !supabase) return;
-    try {
-        const updatePayload: any = { 
-            credits: org.credits,
-            usage_cost: org.usageCost,
-            status: org.status,
-            plan: org.plan
-        };
-        if (org.role) updatePayload.role = org.role;
-
-        const { error } = await supabase
-            .from('organizations')
-            .update(updatePayload)
-            .eq('id', org.id);
-
-        if (error) throw error;
-    } catch (error: any) {
-        console.warn("Error updating organization:", error.message);
-    }
-  },
-
-  async deleteOrganization(orgId: string): Promise<void> {
-    if (localStorage.getItem('vapi_demo_session') || !supabase) return;
-    try {
-        const { error } = await supabase.from('organizations').delete().eq('id', orgId);
-        if (error) throw error;
-    } catch (error: any) {
-        console.warn("Error deleting organization:", error.message);
-    }
-  },
-
-  // --- ASSISTANT MAPPINGS ---
-  async getAssistantMappings(): Promise<{assistant_id: string, org_id: string}[]> {
-    if (!supabase) return [];
-    try {
-      const { data, error } = await supabase.from('assistant_org_map').select('*');
-      if (error) throw error;
-      return data;
-    } catch (error) {
-      return [];
-    }
-  },
+  async deleteOrganization(id: string): Promise<void> {
+    this.checkClient();
+    const { error } = await this.supabase!
+        .from('organizations')
+        .delete()
+        .eq('id', id);
+    
+    if (error) throw error;
+  }
 
   async saveAssistantMapping(assistantId: string, orgId: string): Promise<void> {
-    if (!supabase) return;
-    try {
-      await supabase
-        .from('assistant_org_map')
-        .upsert({ assistant_id: assistantId, org_id: orgId }, { onConflict: 'assistant_id' });
-    } catch (error) {
-      // ignore
-    }
-  },
+    this.checkClient();
+    const { error } = await this.supabase!
+        .from('assistants')
+        .upsert({ id: assistantId, org_id: orgId }, { onConflict: 'id' });
+        
+    if (error) console.error("Failed to map assistant to org in Supabase:", error.message);
+  }
 
-  // --- FILES ---
+  async getAllAssistantMappings(): Promise<{ id: string, org_id: string }[]> {
+    if (!this.supabase) return [];
+    const { data, error } = await this.supabase
+        .from('assistants')
+        .select('id, org_id');
+    
+    if (error) {
+        // Prevent [object Object] by logging message
+        console.error("Error fetching assistant mappings:", error.message || error);
+        return [];
+    }
+    return data || [];
+  }
+
   async getFiles(orgId: string): Promise<FileItem[]> {
-    if (!supabase) return MOCK_FILES;
-    try {
-      const { data, error } = await supabase
+    if (!this.supabase) return [];
+    const { data, error } = await this.supabase
         .from('files')
         .select('*')
         .eq('org_id', orgId)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      return data.map((f: any) => ({
+        .order('uploaded_at', { ascending: false });
+        
+    if (error) {
+        console.error("Error fetching files:", error.message);
+        return [];
+    }
+    // Map DB columns to FileItem
+    return (data || []).map((f: any) => ({
         id: f.id,
         name: f.name,
         size: f.size,
         type: f.type,
-        uploadedAt: f.created_at
-      }));
-    } catch (error: any) {
-      return MOCK_FILES;
-    }
-  },
+        uploadedAt: f.uploaded_at || f.created_at
+    }));
+  }
 
   async createFile(file: FileItem, orgId: string): Promise<void> {
-    if (localStorage.getItem('vapi_demo_session')) return;
-    if (!supabase) return;
-    try {
-      await supabase.from('files').insert({
-        id: file.id,
-        org_id: orgId,
-        name: file.name,
-        size: file.size,
-        type: file.type,
-        created_at: file.uploadedAt
-      });
-    } catch (error) { console.warn("Create file failed"); }
-  },
+    this.checkClient();
+    const { error } = await this.supabase!
+        .from('files')
+        .insert([{
+            id: file.id,
+            org_id: orgId,
+            name: file.name,
+            size: file.size,
+            type: file.type,
+            uploaded_at: file.uploadedAt
+        }]);
+    if (error) throw error;
+  }
 
-  async deleteFile(fileId: string): Promise<void> {
-    if (localStorage.getItem('vapi_demo_session')) return;
-    if (!supabase) return;
-    try {
-      await supabase.from('files').delete().eq('id', fileId);
-    } catch (error) { console.warn("Delete file failed"); }
-  },
+  async deleteFile(id: string): Promise<void> {
+    this.checkClient();
+    const { error } = await this.supabase!
+        .from('files')
+        .delete()
+        .eq('id', id);
+    if (error) throw error;
+  }
 
-  // --- TOOLS ---
   async getTools(orgId: string): Promise<ToolItem[]> {
-    if (!supabase) return MOCK_TOOLS;
-    try {
-      const { data, error } = await supabase
+    if (!this.supabase) return [];
+    const { data, error } = await this.supabase
         .from('tools')
         .select('*')
-        .eq('org_id', orgId)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-
-      return data.map((t: any) => ({
-        id: t.id,
-        name: t.name,
-        description: t.description,
-        type: t.type
-      }));
-    } catch (error: any) {
-      return MOCK_TOOLS;
+        .eq('org_id', orgId);
+        
+    if (error) {
+        console.error("Error fetching tools:", error.message);
+        return [];
     }
-  },
+    return data || [];
+  }
 
   async createTool(tool: ToolItem, orgId: string): Promise<void> {
-    if (localStorage.getItem('vapi_demo_session')) return;
-    if (!supabase) return;
-    try {
-      await supabase.from('tools').insert({
-        id: tool.id,
-        org_id: orgId,
-        name: tool.name,
-        description: tool.description,
-        type: tool.type,
-        created_at: new Date().toISOString()
-      });
-    } catch (error) { console.warn("Create tool failed"); }
-  },
-
-  async deleteTool(toolId: string): Promise<void> {
-    if (localStorage.getItem('vapi_demo_session')) return;
-    if (!supabase) return;
-    try {
-        await supabase.from('tools').delete().eq('id', toolId);
-    } catch (error) { console.warn("Delete tool failed"); }
+    this.checkClient();
+    const { error } = await this.supabase!
+        .from('tools')
+        .insert([{ ...tool, org_id: orgId }]);
+    if (error) throw error;
   }
-};
+
+  async deleteTool(id: string): Promise<void> {
+    this.checkClient();
+    const { error } = await this.supabase!
+        .from('tools')
+        .delete()
+        .eq('id', id);
+    if (error) throw error;
+  }
+}
+
+export const supabaseService = new SupabaseService();

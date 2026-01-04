@@ -1,392 +1,278 @@
 import React, { useState, useEffect } from 'react';
+import { ViewState, Organization, Assistant } from './types';
 import { Sidebar } from './components/Sidebar';
 import { Overview } from './pages/Overview';
 import { Assistants } from './pages/Assistants';
-import { Logs } from './pages/Logs';
 import { PhoneNumbers } from './pages/PhoneNumbers';
+import { Logs } from './pages/Logs';
 import { Files } from './pages/Files';
 import { Tools } from './pages/Tools';
 import { Settings } from './pages/Settings';
-import { MasterOverview } from './pages/MasterOverview';
 import { Login } from './pages/Login';
-import { ViewState, Organization, Assistant } from './types';
-import { MOCK_ASSISTANTS, VAPI_PRIVATE_KEY, NIYA_ORG_ID, MOCK_ORGS } from './constants';
-import { fetchVapiAssistants, parseSecureToken } from './services/vapiService';
-import { supabaseService, supabase, authStateChanged } from './services/supabaseClient';
-import { Loader2 } from 'lucide-react';
-
-const ADMIN_EMAIL = 'admin@vapi.clone'; // Hardcoded admin email for clone behavior fallback
+import { MasterOverview } from './pages/MasterOverview';
+import { supabaseService } from './services/supabaseClient';
+import { fetchVapiAssistants } from './services/vapiService';
+import { MOCK_ORGS, NIYA_ORG_ID, VAPI_PRIVATE_KEY } from './constants';
+import { Loader2, Bell, Search, AlertCircle } from 'lucide-react';
 
 export default function App() {
-  // Auth State
-  const [session, setSession] = useState<any>(null);
-  const [isAuthLoading, setIsAuthLoading] = useState(true);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [session, setSession] = useState<{user: any} | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   // App State
-  const [organizations, setOrganizations] = useState<Organization[]>([]);
-  const [isLoadingOrgs, setIsLoadingOrgs] = useState(false);
-  
-  const [selectedOrg, setSelectedOrg] = useState<Organization | null>(null);
   const [currentView, setCurrentView] = useState<ViewState>('overview');
-  const [assistants, setAssistants] = useState<Assistant[]>(MOCK_ASSISTANTS);
+  const [selectedOrg, setSelectedOrg] = useState<Organization | null>(null);
+  const [userOrgs, setUserOrgs] = useState<Organization[]>([]); // Orgs accessible to the user
+  const [allOrgs, setAllOrgs] = useState<Organization[]>([]); // All orgs (Admin only)
+  
+  const [assistants, setAssistants] = useState<Assistant[]>([]);
+  const [isAdmin, setIsAdmin] = useState(false);
+  
+  // Master Account State
+  const [isMasterView, setIsMasterView] = useState(false);
 
-  // 1. Check Auth Session on Mount & Listen for changes & Check Magic Link
   useEffect(() => {
-    // 0. Detect Token Immediately
-    const params = new URLSearchParams(window.location.search);
-    let token = params.get('token');
-    
-    // Fallback: Check hash params just in case (e.g. #/?token=...)
-    if (!token && window.location.hash.includes('token=')) {
-        const hashParts = window.location.hash.split('?');
-        if (hashParts.length > 1) {
-            const hashParams = new URLSearchParams(hashParts[1]);
-            token = hashParams.get('token');
+    // Initial Check
+    supabaseService.getCurrentUser().then(user => {
+        if (user) {
+            setSession({ user });
+        } else {
+            setSession(null);
+            setIsLoading(false);
         }
-    }
+    });
 
-    if (token) {
-        // --- MAGIC LINK FLOW ---
-        // We handle this exclusively and do NOT attach standard auth listeners 
-        // to prevent them from overwriting our magic session with a "signed out" state.
-        const handleMagicLink = async () => {
-             console.log("Processing Magic Link...");
-             const decoded = parseSecureToken(token!);
-             
-             if (decoded && decoded.id) {
-                 console.log("Magic Link Valid. Org:", decoded.id);
-                 
-                 // 1. Set Session immediately to block Login screen
-                 setSession({
-                    user: {
-                        id: 'magic_user',
-                        email: 'magic@link.access',
-                        role: 'authenticated'
-                    }
-                 });
-                 setIsAdmin(false);
-
-                 // 2. Load Data
-                 setIsLoadingOrgs(true);
-                 try {
-                     // Try to fetch the specific org
-                     const orgs = await supabaseService.getOrganizations(decoded.id);
-                     if (orgs.length > 0) {
-                         setOrganizations(orgs);
-                         setSelectedOrg(orgs[0]);
-                     } else {
-                         // Fallback logic for when DB fetch fails or org not found
-                         console.warn("Org not found via Magic Link (or offline). Using mock fallback.");
-                         const demoOrg = MOCK_ORGS.find(o => o.id === decoded.id) || { 
-                             ...MOCK_ORGS[0], 
-                             id: decoded.id, 
-                             name: decoded.nm || 'Magic Org',
-                             role: 'user'
-                         };
-                         setOrganizations([demoOrg]);
-                         setSelectedOrg(demoOrg);
-                     }
-                     // Clean URL without reloading
-                     window.history.replaceState({}, document.title, window.location.pathname);
-                 } catch (e) {
-                     console.error("Magic Link Data Error:", e);
-                     // Robust fallback
-                     setOrganizations(MOCK_ORGS);
-                     setSelectedOrg(MOCK_ORGS[0]);
-                 } finally {
-                     setIsLoadingOrgs(false);
-                     setIsAuthLoading(false);
-                 }
-             } else {
-                 console.error("Invalid Magic Link Token");
-                 initStandardAuth(); // Fallback if token invalid
-             }
-        };
-
-        handleMagicLink();
-        return; // STOP EXECUTION HERE - Do not attach Supabase listeners
-    }
-
-    // --- STANDARD AUTH FLOW ---
-    const initStandardAuth = async () => {
-        // Check Local Fallback (Demo Mode)
-        const demoSession = localStorage.getItem('vapi_demo_session');
-        if (demoSession) {
-            setSession(JSON.parse(demoSession));
-            setIsAuthLoading(false);
-            return;
-        }
-
-        // Check Supabase
-        if (supabase) {
-            try {
-                const { data: { session: sbSession } } = await supabase.auth.getSession();
-                setSession(sbSession);
-            } catch (e) {
-                console.warn("Supabase auth check failed (using offline mode?)");
-            }
-        }
-        setIsAuthLoading(false);
-    };
-
-    initStandardAuth();
-
-    // Listeners (Only attach if we are doing standard auth)
-    let sbListener: any = null;
-    if (supabase) {
-        const { data } = supabase.auth.onAuthStateChange((_event, session) => {
-            setSession(session);
+    // Listen for Auth Changes (Login/Logout)
+    const { data: authListener } = supabaseService.onAuthStateChange((event, newSession) => {
+        // Only update session if the user ID actually changes or session status changes significantly
+        // This prevents infinite re-render loops on 'TOKEN_REFRESHED' events
+        setSession(prev => {
+            if (prev?.user?.id === newSession?.user?.id) return prev; 
+            return newSession;
         });
-        sbListener = data.subscription;
-    }
 
-    const handleCustomAuth = () => {
-        const demoSession = localStorage.getItem('vapi_demo_session');
-        setSession(demoSession ? JSON.parse(demoSession) : null);
-    };
-    
-    authStateChanged.addEventListener('signedIn', handleCustomAuth);
-    authStateChanged.addEventListener('signedOut', handleCustomAuth);
+        if (newSession?.user) {
+            // Reset view on login only if not already logged in
+            if (!session?.user) setCurrentView('overview');
+        } else {
+            // Reset state on logout
+            setIsAdmin(false);
+            setUserOrgs([]);
+            setAllOrgs([]);
+            setSelectedOrg(null);
+            setIsMasterView(false);
+        }
+    });
 
     return () => {
-        sbListener?.unsubscribe();
-        authStateChanged.removeEventListener('signedIn', handleCustomAuth);
-        authStateChanged.removeEventListener('signedOut', handleCustomAuth);
+        authListener.subscription.unsubscribe();
     };
-  }, []);
+  }, []); // Run once on mount
 
-  // 2. Load Data when Session Exists (And not already loaded by Magic Link)
+  // Fetch Data on Session Change
+  // CRITICAL: Depend only on user.id to avoid re-fetching on token refreshes
   useEffect(() => {
-    if (!session || selectedOrg) return; // If selectedOrg exists, we probably loaded via Magic Link
+    if (session?.user?.id) {
+        setIsLoading(true);
+        const initData = async () => {
+            try {
+                // 1. Fetch User's Accessible Orgs (Own + Shared via RLS)
+                const accessibleOrgs = await supabaseService.getUserOrganizations();
+                
+                // 2. Fetch Vapi Data & Mappings in parallel
+                const [vapiData, mappings] = await Promise.all([
+                    fetchVapiAssistants(VAPI_PRIVATE_KEY),
+                    supabaseService.getAllAssistantMappings()
+                ]);
+                
+                if (accessibleOrgs.length > 0) {
+                    // Set User Orgs
+                    setUserOrgs(accessibleOrgs);
+                    
+                    const ownOrg = accessibleOrgs.find(o => o.id === session.user.id);
+                    const invitedOrgs = accessibleOrgs.filter(o => o.id !== session.user.id);
 
-    const initData = async () => {
-        setIsLoadingOrgs(true);
-        try {
-            const userEmail = session.user.email;
-            
-            // First, fetch the user's specific organization to check their Role
-            // The table is indexed by ID, which matches Auth ID
-            const myOrgs = await supabaseService.getOrganizations(session.user.id);
-            const myProfile = myOrgs[0];
+                    // Logic: If user is invited to other orgs, prioritize showing the first invited org
+                    // This handles the case where a new user is invited to a "Mother" org and should see that first.
+                    let defaultOrg = ownOrg;
+                    if (invitedOrgs.length > 0) {
+                        defaultOrg = invitedOrgs[0];
+                    } else if (!defaultOrg) {
+                        defaultOrg = accessibleOrgs[0];
+                    }
 
-            // Determine if Admin:
-            // 1. Explicit 'admin' role in DB
-            // 2. OR hardcoded fallback email (for bootstrapping)
-            const isMasterAdmin = (myProfile?.role === 'admin') || (userEmail === ADMIN_EMAIL);
-            setIsAdmin(isMasterAdmin);
-            
-            if (isMasterAdmin) {
-                 // If Admin, fetch ALL organizations for the Master View
-                 const allOrgs = await supabaseService.getOrganizations(); // No ID param = All
-                 setOrganizations(allOrgs.length > 0 ? allOrgs : MOCK_ORGS); // Fallback to mocks if empty
-                 setSelectedOrg(null); // Default to Master Overview
-            } else {
-                 // If Regular User, just use their profile
-                 if (myOrgs.length > 0) {
-                     setOrganizations(myOrgs);
-                     setSelectedOrg(myProfile);
-                 } else {
-                     // Fallback for Demo/Mock User without DB entry
-                     console.log("User has no organization (or offline). Using default Mock Org.");
-                     const defaultOrg: Organization = MOCK_ORGS[0]; // Use Acme Corp as default for demo
-                     setOrganizations([defaultOrg]);
-                     setSelectedOrg(defaultOrg);
-                 }
+                    setSelectedOrg(defaultOrg);
+                    
+                    // 3. Check Admin Role (Admin is tied to the user's specific org role)
+                    const userRoleOrg = ownOrg || accessibleOrgs.find(o => o.role === 'admin');
+                    
+                    if (userRoleOrg?.role === 'admin') {
+                        setIsAdmin(true);
+                        // Fetch ALL orgs for Master View
+                        const everything = await supabaseService.getAllOrganizations();
+                        setAllOrgs(everything);
+                        // FORCE MASTER VIEW FOR ADMIN LOGIN
+                        setIsMasterView(true);
+                    } else {
+                        setIsAdmin(false);
+                        setAllOrgs(accessibleOrgs); // For non-admin, "all" is just what they can see
+                        setIsMasterView(false);
+                    }
+                } else {
+                    // Critical: User is authenticated but has no org access
+                    console.warn("User logged in but no organization record found.");
+                    setSelectedOrg(null); 
+                }
+
+                // 4. Merge Vapi Assistants with Supabase Mappings
+                // This ensures bots stay in the organization they were created/transferred to
+                const mergedAssistants = vapiData.map(asst => {
+                    const mapping = mappings.find(m => m.id === asst.id);
+                    if (mapping) {
+                        return { ...asst, orgId: mapping.org_id };
+                    }
+                    return asst;
+                });
+
+                setAssistants(mergedAssistants);
+
+            } catch (error) {
+                console.error("Initialization error:", error);
+            } finally {
+                setIsLoading(false);
             }
-
-        } catch (error) {
-            console.error("Failed to init data", error);
-            // Safety fallback
-            setOrganizations(MOCK_ORGS);
-            setSelectedOrg(MOCK_ORGS[0]);
-        } finally {
-            setIsLoadingOrgs(false);
-        }
-    };
-
-    initData();
-  }, [session, selectedOrg]);
-
-  // 3. Load Assistants (Same as before, merged with mappings)
-  useEffect(() => {
-    if (!session) return;
-
-    const loadAssistantsData = async () => {
-      const apiKey = VAPI_PRIVATE_KEY;
-      
-      try {
-          const vapiData = await fetchVapiAssistants(apiKey);
-          const mappings = await supabaseService.getAssistantMappings();
-          const mappingMap = new Map(mappings.map(m => [m.assistant_id, m.org_id]));
-
-          const mergedAssistants = vapiData.map(a => {
-              if (mappingMap.has(a.id)) {
-                  return { ...a, orgId: mappingMap.get(a.id)! };
-              }
-              return { ...a, orgId: a.orgId || NIYA_ORG_ID };
-          });
-
-          setAssistants(mergedAssistants);
-      } catch (error) {
-          console.error("Error loading assistants data:", error);
-          setAssistants(MOCK_ASSISTANTS);
-      }
-    };
-    
-    // Defer assistant loading until we know who is logged in (roughly)
-    if (!isAuthLoading) {
-        loadAssistantsData();
+        };
+        initData();
     }
-  }, [isAuthLoading, session]);
+  }, [session?.user?.id]); // Only re-run if the User ID changes
 
-
-  // Handlers
-  const handleSelectOrg = (org: Organization) => {
-    setSelectedOrg(org);
-    setCurrentView('overview');
+  const handleOrgUpdate = (updatedOrg: Organization) => {
+     // Update in all lists
+     setUserOrgs(prev => prev.map(o => o.id === updatedOrg.id ? updatedOrg : o));
+     setAllOrgs(prev => prev.map(o => o.id === updatedOrg.id ? updatedOrg : o));
+     
+     if (selectedOrg?.id === updatedOrg.id) {
+         setSelectedOrg(updatedOrg);
+     }
   };
 
-  const handleUpdateOrg = (updatedOrg: Organization) => {
-    setOrganizations(prev => prev.map(o => o.id === updatedOrg.id ? updatedOrg : o));
-    if (selectedOrg?.id === updatedOrg.id) {
-        setSelectedOrg(updatedOrg);
-    }
-  };
-
-  const handleAddOrg = (newOrg: Organization) => {
-    setOrganizations(prev => [newOrg, ...prev]);
-  };
-
-  const handleDeleteOrg = async (orgId: string) => {
-    // 1. Call Service
-    await supabaseService.deleteOrganization(orgId);
-    // 2. Update Local State
-    setOrganizations(prev => prev.filter(o => o.id !== orgId));
-  };
-
-  const handleTransferAssistant = async (assistant: Assistant, targetOrgId: string) => {
-    // We update the assistant in MasterOverview before calling this to handle renaming, 
-    // but we need to update local state here.
-    setAssistants(prev => prev.map(a => 
-        a.id === assistant.id 
-        ? { ...assistant, orgId: targetOrgId } 
-        : a
-    ));
-    await supabaseService.saveAssistantMapping(assistant.id, targetOrgId);
-  };
-
-  const handleBackToMaster = () => {
-    setSelectedOrg(null);
-  };
-
-  // --- RENDER ---
-
-  // 1. Loading Screen - FIXED CENTER POSITIONING
-  if (isAuthLoading || (session && isLoadingOrgs)) {
-      return (
-          <div className="min-h-screen bg-vapi-bg flex items-center justify-center font-sans">
-              <div className="flex flex-col items-center justify-center gap-6 animate-fade-in">
-                 <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500/20 to-purple-500/20 flex items-center justify-center border border-indigo-500/30 shadow-[0_0_40px_-10px_rgba(99,102,241,0.3)]">
-                     <Loader2 className="text-indigo-400 animate-spin" size={32} />
-                 </div>
-                 <div className="text-center space-y-2">
-                    <h2 className="text-white font-bold text-xl tracking-tight">Vapi Dashboard</h2>
-                    <p className="text-zinc-500 text-sm font-medium animate-pulse">
-                        {isAuthLoading ? 'Authenticating...' : 'Loading organization...'}
-                    </p>
-                 </div>
-              </div>
-          </div>
-      );
-  }
-
-  // 2. Login Screen (No Session)
-  if (!session) {
-      return <Login />;
-  }
-
-  // 3. Master Admin View (No Org Selected)
-  if (!selectedOrg) {
+  if (isLoading) {
     return (
-      <MasterOverview 
-        organizations={organizations}
-        assistants={assistants}
-        onSelectOrg={handleSelectOrg}
-        onUpdateOrg={handleUpdateOrg}
-        onAddOrg={handleAddOrg}
-        onDeleteOrg={handleDeleteOrg}
-        onTransferAssistant={handleTransferAssistant}
-      />
+        <div className="min-h-screen bg-vapi-bg flex items-center justify-center">
+            <Loader2 className="animate-spin text-vapi-accent" size={32} />
+        </div>
     );
   }
 
-  // 4. Org Dashboard View
-  if (selectedOrg) {
-      return (
-        <div className="flex min-h-screen bg-vapi-bg font-sans selection:bg-vapi-accent selection:text-black animate-fade-in">
-          <Sidebar 
-            currentView={currentView} 
-            onChangeView={setCurrentView} 
-            selectedOrg={selectedOrg}
-            onBackToMaster={handleBackToMaster}
-            isAdmin={isAdmin}
-          />
-          <main className="flex-1 ml-64 p-8 overflow-y-auto h-screen">
-            <div className="max-w-7xl mx-auto">
-              {(() => {
-                switch (currentView) {
-                  case 'overview': return <Overview />;
-                  case 'assistants': 
-                    return (
-                      <Assistants 
-                        assistants={assistants}
-                        setAssistants={setAssistants}
-                        selectedOrgId={selectedOrg.id}
-                        selectedOrgName={selectedOrg.name}
-                      />
-                    );
-                  case 'logs': return <Logs />;
-                  case 'phone-numbers': return <PhoneNumbers />;
-                  case 'files': return <Files orgId={selectedOrg.id} />;
-                  case 'tools': return <Tools orgId={selectedOrg.id} />;
-                  case 'settings': 
-                    return (
-                        <Settings 
-                            org={selectedOrg} 
-                            onUpdateOrg={handleUpdateOrg}
-                            assistants={assistants}
-                            setAssistants={setAssistants}
-                        />
-                    );
-                  default: return <Overview />;
-                }
-              })()}
+  if (!session?.user) {
+    return <Login />;
+  }
+
+  // Handle Missing Org Case (e.g., signup failed halfway or no invites)
+  if (!selectedOrg) {
+     return (
+        <div className="min-h-screen bg-vapi-bg flex flex-col items-center justify-center p-6 text-center">
+            <div className="w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center mb-4">
+                <AlertCircle className="text-red-500" size={32} />
             </div>
-          </main>
-          
-          <div className="md:hidden fixed inset-0 bg-black z-[100] flex items-center justify-center p-8 text-center">
-            <div>
-              <h2 className="text-xl font-bold text-white mb-2">Desktop Only</h2>
-              <p className="text-zinc-400">Please view this dashboard on a larger screen.</p>
-            </div>
-          </div>
+            <h1 className="text-2xl font-bold text-white mb-2">Account Setup Incomplete</h1>
+            <p className="text-zinc-500 max-w-md mb-6">
+                Your account was created, but no organization profile was found or invited.
+            </p>
+            <button 
+                onClick={() => supabaseService.signOut()}
+                className="px-6 py-2 bg-white text-black font-bold rounded-lg hover:bg-zinc-200 transition-colors"
+            >
+                Sign Out & Try Again
+            </button>
         </div>
+     );
+  }
+
+  // Render Master Overview only if Admin AND (MasterView toggled OR forced context)
+  if (isAdmin && isMasterView) {
+      return (
+          <MasterOverview 
+             organizations={allOrgs}
+             assistants={assistants}
+             onSelectOrg={(org) => {
+                 setSelectedOrg(org);
+                 setIsMasterView(false);
+                 setCurrentView('overview');
+             }}
+             onUpdateOrg={handleOrgUpdate}
+             onAddOrg={(org) => setAllOrgs(prev => [org, ...prev])}
+             onDeleteOrg={(id) => setAllOrgs(prev => prev.filter(o => o.id !== id))}
+             onTransferAssistant={(asst, targetOrgId) => {
+                 const updated = { ...asst, orgId: targetOrgId };
+                 setAssistants(prev => prev.map(a => a.id === asst.id ? updated : a));
+             }}
+             onUpdateAssistant={(asst) => setAssistants(prev => prev.map(a => a.id === asst.id ? asst : a))}
+             onDeleteAssistant={(id) => setAssistants(prev => prev.filter(a => a.id !== id))}
+          />
       );
   }
 
   return (
-    <div className="min-h-screen bg-vapi-bg flex flex-col items-center justify-center p-8 text-center">
-        <h2 className="text-xl font-bold text-white mb-2">Account Error</h2>
-        <p className="text-zinc-400 max-w-md mb-6">
-            Unable to determine account status.
-        </p>
-        <button 
-            onClick={() => supabaseService.signOut()}
-            className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg font-medium transition-colors"
-        >
-            Sign Out
-        </button>
+    <div className="flex min-h-screen bg-vapi-bg text-vapi-text font-sans selection:bg-vapi-accent selection:text-black">
+      <Sidebar 
+        currentView={currentView}
+        onChangeView={setCurrentView}
+        selectedOrg={selectedOrg}
+        organizations={userOrgs} // Pass accessible orgs to sidebar
+        onSelectOrg={setSelectedOrg} // Handle switching
+        onBackToMaster={() => setIsMasterView(true)}
+        isAdmin={isAdmin}
+      />
+
+      <main className="flex-1 ml-64 p-8 overflow-y-auto min-h-screen">
+         {/* Top Header */}
+         <header className="flex justify-between items-center mb-8">
+           <div className="relative w-96">
+             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" size={16} />
+             <input 
+               type="text" 
+               placeholder="Search anything..." 
+               className="w-full bg-vapi-card border border-vapi-border rounded-lg pl-10 pr-4 py-2 text-sm text-white focus:outline-none focus:border-vapi-border focus:bg-zinc-900 transition-colors"
+             />
+           </div>
+           <div className="flex items-center gap-4">
+             <button className="relative p-2 text-zinc-400 hover:text-white transition-colors">
+               <Bell size={20} />
+               <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full border-2 border-black"></span>
+             </button>
+           </div>
+        </header>
+
+        {currentView === 'overview' && <Overview />}
+        
+        {currentView === 'assistants' && (
+            <Assistants 
+                assistants={assistants} 
+                setAssistants={setAssistants}
+                selectedOrgId={selectedOrg.id}
+                selectedOrgName={selectedOrg.name}
+            />
+        )}
+        
+        {currentView === 'phone-numbers' && <PhoneNumbers />}
+        
+        {currentView === 'logs' && <Logs />}
+        
+        {currentView === 'files' && <Files orgId={selectedOrg.id} />}
+        
+        {currentView === 'tools' && <Tools orgId={selectedOrg.id} />}
+        
+        {currentView === 'settings' && (
+            <Settings 
+                key={selectedOrg.id}
+                org={selectedOrg} 
+                onUpdateOrg={handleOrgUpdate}
+                assistants={assistants}
+                setAssistants={setAssistants}
+            />
+        )}
+      </main>
     </div>
   );
 }

@@ -1,22 +1,21 @@
 import React from 'react';
 import { Plus, Search } from 'lucide-react';
+import { useToast } from '../components/ToastProvider';
 
 export const PhoneNumbers: React.FC = () => {
+  const { showToast } = useToast();
+
   return (
     <div className="space-y-6 animate-fade-in">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-white">Phone Numbers</h1>
         <button 
-          className="flex items-center gap-2 bg-vapi-accent hover:bg-teal-300 text-black px-4 py-2 rounded-lg font-medium transition-colors"
+          onClick={() => showToast("Number purchasing is temporarily unavailable.", "info")}
+          className="flex items-center gap-2 bg-vapi-accent hover:bg-orange-500 text-black px-4 py-2 rounded-lg font-medium transition-colors"
         >
           <Plus size={18} />
           <span>Buy Number</span>
         </button>
-      </div>
-
-      <div className="bg-yellow-900/20 border border-yellow-700/50 p-4 rounded-lg flex gap-3 text-yellow-200/80 text-sm">
-        <div className="mt-0.5">⚠️</div>
-        <p>This is a demo clone. No real phone numbers can be purchased or managed here.</p>
       </div>
 
       <div className="flex items-center gap-4 bg-vapi-card p-2 rounded-lg border border-vapi-border">

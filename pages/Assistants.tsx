@@ -1,14 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Assistant, ChatMessage } from '../types';
-import { Plus, Search, MoreHorizontal, MessageSquare, Save, Play, Terminal, Sparkles, X, ChevronLeft, Volume2, Loader2, Key, Trash2, AlertTriangle, Edit, Trash, Cpu, Mic, Radio } from 'lucide-react';
-import { generateSystemPrompt, chatWithAssistant, generateSpeech } from '../services/geminiService';
+import { Plus, Search, MoreHorizontal, MessageSquare, Save, Play, Terminal, Sparkles, X, ChevronLeft, Volume2, Loader2, Key, Trash2, AlertTriangle, Edit, Trash, Cpu, Mic, Radio, ChevronRight, Copy } from 'lucide-react';
 import { createVapiAssistant, updateVapiAssistant, deleteVapiAssistant } from '../services/vapiService';
 import { supabaseService } from '../services/supabaseClient';
 import { VAPI_PRIVATE_KEY } from '../constants';
 import { useToast } from '../components/ToastProvider';
+import { CustomSelect } from '../components/CustomSelect';
+import { Modal } from '../components/Modal';
 
 // Voices from the screenshot
-const ELEVEN_LABS_VOICES = [
+export const ELEVEN_LABS_VOICES = [
   'burt', 'marissa', 'andrea', 'sarah', 'phillip', 'steve', 
   'joseph', 'myra', 'paula', 'ryan', 'drew', 'paul', 'mrb', 'matilda', 'mark'
 ];
@@ -62,12 +63,12 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
   const handleCreate = () => {
     const newAsst: Assistant = {
       id: `asst_draft_${Date.now()}`,
-      orgId: selectedOrgId, // Assign to current organization context immediately
+      orgId: selectedOrgId, 
       name: 'New Assistant',
       model: {
         provider: 'openai',
         model: 'gpt-4',
-        systemPrompt: '',
+        systemPrompt: 'You are a helpful assistant.',
         temperature: 0.7
       },
       voice: { provider: '11labs', voiceId: 'sarah' }, 
@@ -78,7 +79,23 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
     // Select immediately for editing
     setSelectedAssistant(newAsst);
     setEditedAssistant(newAsst);
-    setHasUnsavedChanges(true); // Enable Publish button for new drafts
+    setHasUnsavedChanges(true); 
+  };
+
+  const handleClone = (asst: Assistant, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setActiveDropdown(null);
+
+    const clonedAsst: Assistant = JSON.parse(JSON.stringify(asst));
+    clonedAsst.id = `asst_draft_${Date.now()}`;
+    clonedAsst.name = `Copy of ${asst.name}`;
+    clonedAsst.createdAt = new Date().toISOString();
+    clonedAsst.orgId = selectedOrgId;
+
+    setSelectedAssistant(clonedAsst);
+    setEditedAssistant(clonedAsst);
+    setHasUnsavedChanges(true);
+    showToast("Assistant cloned. Review and publish to save.", "info");
   };
 
   const handleBack = () => {
@@ -99,14 +116,30 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
       if (editedAssistant.id.startsWith('asst_draft_')) {
         let assistantToSave = { ...editedAssistant };
         const suffix = ` - ${selectedOrgName}`;
-        if (!assistantToSave.name.endsWith(suffix)) {
-             assistantToSave.name = `${assistantToSave.name}${suffix}`;
+        
+        let baseName = assistantToSave.name;
+        // Strip suffix if accidentally present
+        if (baseName.endsWith(suffix)) {
+             baseName = baseName.slice(0, -suffix.length);
         }
+        
+        // Enforce 40 char limit (base + suffix <= 40)
+        const maxBaseLength = Math.max(0, 40 - suffix.length);
+        if (baseName.length > maxBaseLength) {
+             baseName = baseName.substring(0, maxBaseLength);
+        }
+
+        assistantToSave.name = `${baseName}${suffix}`;
 
         const createdAssistant = await createVapiAssistant(apiKeyToUse, assistantToSave);
         
         if (createdAssistant) {
-          await supabaseService.saveAssistantMapping(createdAssistant.id, selectedOrgId);
+          try {
+             await supabaseService.saveAssistantMapping(createdAssistant.id, selectedOrgId);
+          } catch (dbError) {
+             console.warn("Failed to sync with Supabase:", dbError);
+          }
+
           const assistanWithContext = { ...createdAssistant, orgId: selectedOrgId };
           setAssistants(prev => [assistanWithContext, ...prev]);
           setSelectedAssistant(assistanWithContext);
@@ -115,7 +148,13 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
         }
       } else {
         const updatedAssistant = await updateVapiAssistant(apiKeyToUse, editedAssistant);
-        await supabaseService.saveAssistantMapping(updatedAssistant.id, selectedOrgId);
+        
+        try {
+            await supabaseService.saveAssistantMapping(updatedAssistant.id, selectedOrgId);
+        } catch (dbError) {
+             console.warn("Failed to sync with Supabase:", dbError);
+        }
+
         const assistanWithContext = { ...updatedAssistant, orgId: selectedOrgId };
         setAssistants(prev => prev.map(a => a.id === editedAssistant.id ? assistanWithContext : a));
         setSelectedAssistant(assistanWithContext);
@@ -126,11 +165,11 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
       setShowApiKeyModal(false);
     } catch (error: any) {
       console.error("Failed to save assistant", error);
-      if (error.message.includes('401') || error.message.toLowerCase().includes('unauthorized')) {
+      if (error.message && (error.message.includes('401') || error.message.toLowerCase().includes('unauthorized'))) {
         setShowApiKeyModal(true);
         showToast("Authentication failed. Please verify API key.", "error");
       } else {
-        showToast(`Failed to save to Vapi: ${error.message}`, "error");
+        showToast(`Failed to save to Vapi: ${error.message || 'Unknown error'}`, "error");
       }
     } finally {
       setIsSaving(false);
@@ -162,7 +201,7 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
         showToast('Assistant deleted successfully.', 'success');
         setShowApiKeyModal(false);
     } catch (error: any) {
-        if (error.message.includes('401') || error.message.toLowerCase().includes('unauthorized')) {
+        if (error.message && (error.message.includes('401') || error.message.toLowerCase().includes('unauthorized'))) {
             setShowApiKeyModal(true);
             setUserApiKey(''); 
             showToast("Authentication failed. Please verify API key.", "error");
@@ -173,7 +212,7 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
             handleBack();
         }
         setAssistantToDelete(null);
-        showToast('Assistant removed locally.', 'warning');
+        showToast(`Assistant removed locally (API error: ${error.message})`, 'warning');
         setShowApiKeyModal(false);
     } finally {
         setIsSaving(false);
@@ -236,23 +275,29 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
           isSaving={isSaving}
           orgName={selectedOrgName}
         />
-        {/* Modals are rendered here to reuse logic easily */}
-        {showDeleteConfirm && assistantToDelete && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
-             <div className="bg-vapi-card border border-vapi-border rounded-xl w-full max-w-sm shadow-2xl p-6 border-red-500/20">
+        {/* Modals reused */}
+        <Modal
+            isOpen={showDeleteConfirm}
+            onClose={() => setShowDeleteConfirm(false)}
+            onClosed={() => setAssistantToDelete(null)}
+            className="max-w-sm"
+        >
+             <div className="bg-vapi-card border border-vapi-border rounded-xl shadow-2xl p-6 border-red-500/20">
                 <div className="flex items-center gap-3 mb-4 text-white">
                   <div className="p-3 bg-red-500/10 rounded-full text-red-500">
                     <AlertTriangle size={24} />
                   </div>
                   <h3 className="text-lg font-bold">Delete Assistant?</h3>
                 </div>
-                <p className="text-zinc-400 text-sm mb-6">
-                  Are you sure you want to delete <span className="text-white font-medium">{assistantToDelete.name}</span>? 
-                  This action cannot be undone.
-                </p>
+                {assistantToDelete && (
+                    <p className="text-zinc-400 text-sm mb-6">
+                    Are you sure you want to delete <span className="text-white font-medium">{assistantToDelete.name}</span>? 
+                    This action cannot be undone.
+                    </p>
+                )}
                 <div className="flex justify-end gap-3">
                   <button 
-                    onClick={() => { setShowDeleteConfirm(false); setAssistantToDelete(null); }}
+                    onClick={() => setShowDeleteConfirm(false)}
                     className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg font-medium transition-colors"
                   >
                     Cancel
@@ -265,13 +310,16 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
                   </button>
                 </div>
              </div>
-          </div>
-        )}
+        </Modal>
       
         {/* API Key Modal */}
-        {showApiKeyModal && (
-           <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
-           <div className="bg-vapi-card border border-vapi-border rounded-xl w-full max-w-md shadow-2xl p-6">
+        <Modal
+            isOpen={showApiKeyModal}
+            onClose={() => setShowApiKeyModal(false)}
+            onClosed={() => setPendingAction(null)}
+            className="max-w-md"
+        >
+           <div className="bg-vapi-card border border-vapi-border rounded-xl shadow-2xl p-6">
               <div className="flex items-center gap-2 mb-4 text-white">
                 <Key className="text-vapi-accent" size={20} />
                 <h3 className="text-lg font-bold">Enter Vapi Private Key</h3>
@@ -289,10 +337,7 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
               />
               <div className="flex justify-end gap-3">
                 <button 
-                  onClick={() => {
-                      setShowApiKeyModal(false);
-                      setPendingAction(null);
-                  }}
+                  onClick={() => setShowApiKeyModal(false)}
                   className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg font-medium transition-colors"
                 >
                   Cancel
@@ -300,14 +345,13 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
                 <button 
                   onClick={handleModalConfirm}
                   disabled={!userApiKey}
-                  className={`px-4 py-2 rounded-lg font-bold transition-colors disabled:opacity-50 ${pendingAction === 'delete' ? 'bg-red-500 hover:bg-red-400 text-white' : 'bg-vapi-accent hover:bg-teal-300 text-black'}`}
+                  className={`px-4 py-2 rounded-lg font-bold transition-colors disabled:opacity-50 ${pendingAction === 'delete' ? 'bg-red-500 hover:bg-red-400 text-white' : 'bg-vapi-accent hover:bg-orange-500 text-black'}`}
                 >
                   Confirm
                 </button>
               </div>
            </div>
-        </div>
-      )}
+        </Modal>
       </>
     );
   }
@@ -322,14 +366,14 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
         </div>
         <button 
           onClick={handleCreate}
-          className="flex items-center gap-2 bg-white text-black hover:bg-zinc-200 px-5 py-2.5 rounded-xl font-semibold transition-all shadow-lg shadow-white/10"
+          className="flex items-center gap-2 bg-white text-black hover:bg-orange-100 px-5 py-2.5 rounded-xl font-semibold transition-all shadow-lg shadow-white/10"
         >
           <Plus size={18} />
           <span>Create New</span>
         </button>
       </div>
 
-      <div className="flex items-center gap-4 bg-zinc-900/30 p-2 rounded-xl border border-white/5 backdrop-blur-sm">
+      <div className="flex items-center gap-4 bg-zinc-900/30 p-2 rounded-lg border border-white/5 backdrop-blur-sm">
         <Search className="text-zinc-500 ml-2" size={20} />
         <input 
           type="text" 
@@ -349,91 +393,105 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
           filteredAssistants.map(asst => (
             <div 
               key={asst.id} 
-              className="group relative bg-zinc-900/40 border border-white/5 hover:border-white/10 rounded-2xl p-6 transition-all duration-300 hover:shadow-2xl hover:shadow-black/50 hover:-translate-y-1 backdrop-blur-md flex flex-col h-[260px]"
+              className="group relative bg-[#0e0e0e] border border-zinc-800 hover:bg-zinc-900 hover:border-vapi-accent/30 rounded-2xl p-6 transition-colors duration-200 flex flex-col h-[280px]"
             >
               {/* Header */}
               <div className="flex justify-between items-start mb-6">
-                 <div className="flex flex-col gap-1 w-full pr-8">
-                    <div className="flex items-center gap-2">
-                        <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)] animate-pulse"></span>
-                        <h3 className="text-lg font-bold text-white truncate" title={asst.name}>{asst.name}</h3>
+                 <div className="flex items-center gap-3 w-full pr-8">
+                    {/* Vertical Accent Bar */}
+                    <div className="w-1 h-10 bg-vapi-accent rounded-full shrink-0"></div>
+                    
+                    <div className="flex flex-col overflow-hidden">
+                       <h3 className="text-lg font-bold text-white truncate leading-tight mb-1" title={asst.name}>
+                           {asst.name}
+                       </h3>
+                       <div className="flex items-center gap-2 text-[10px] text-zinc-500 font-mono truncate">
+                          <span>{asst.id.substring(0, 20)}...</span>
+                       </div>
                     </div>
-                    <span className="text-[10px] font-mono text-zinc-500 truncate">{asst.id}</span>
                  </div>
                  
+                 {/* Menu Button */}
                  <div className="absolute right-4 top-4">
                       <button 
                           onClick={(e) => {
                               e.stopPropagation();
                               setActiveDropdown(activeDropdown === asst.id ? null : asst.id);
                           }}
-                          className={`p-2 rounded-lg text-zinc-500 hover:text-white hover:bg-white/5 transition-all ${activeDropdown === asst.id ? 'bg-white/10 text-white' : ''}`}
+                          className={`text-zinc-600 hover:text-white transition-colors p-1 ${activeDropdown === asst.id ? 'text-white' : ''}`}
                       >
                           <MoreHorizontal size={20} />
                       </button>
                       
-                      {activeDropdown === asst.id && (
-                          <div className="absolute right-0 top-full mt-2 w-48 bg-[#0a0a0a] border border-zinc-800 rounded-xl shadow-2xl z-30 overflow-hidden animate-in fade-in zoom-in-95 duration-150 origin-top-right">
-                              <button 
-                                  onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleSelect(asst);
-                                      setActiveDropdown(null);
-                                  }}
-                                  className="w-full flex items-center gap-2 px-4 py-3 text-sm text-zinc-300 hover:bg-zinc-900 hover:text-white transition-colors text-left"
-                              >
-                                  <Edit size={14} />
-                                  Edit Configuration
-                              </button>
-                              <div className="h-px bg-zinc-900 my-0"></div>
-                              <button 
-                                  onClick={(e) => {
-                                      e.stopPropagation();
-                                      setActiveDropdown(null);
-                                      handleDeleteClick(asst);
-                                  }}
-                                  className="w-full flex items-center gap-2 px-4 py-3 text-sm text-red-400 hover:bg-red-500/10 hover:text-red-300 transition-colors text-left"
-                              >
-                                  <Trash size={14} />
-                                  Delete Assistant
-                              </button>
-                          </div>
-                      )}
+                      {/* Dropdown Menu with Smooth Transitions */}
+                      <div 
+                          className={`absolute right-0 top-full mt-1 w-48 bg-zinc-950 border border-zinc-800 rounded-xl shadow-2xl z-30 overflow-hidden origin-top-right transition-all duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]
+                          ${activeDropdown === asst.id ? 'opacity-100 scale-100 translate-y-0 pointer-events-auto' : 'opacity-0 scale-95 -translate-y-2 pointer-events-none'}`}
+                      >
+                          <button 
+                              onClick={(e) => handleClone(asst, e)}
+                              className="w-full flex items-center gap-2 px-4 py-3 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-white transition-colors text-left cursor-pointer border-b border-zinc-800"
+                          >
+                              <Copy size={14} />
+                              Clone Assistant
+                          </button>
+                          <button 
+                              onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveDropdown(null);
+                                  handleDeleteClick(asst);
+                              }}
+                              className="w-full flex items-center gap-2 px-4 py-3 text-sm text-red-400 hover:bg-red-500/10 hover:text-red-300 transition-colors text-left cursor-pointer"
+                          >
+                              <Trash size={14} />
+                              Delete Assistant
+                          </button>
+                      </div>
                  </div>
               </div>
 
-              {/* Specs Grid */}
-              <div className="grid grid-cols-2 gap-3 mb-6">
-                 {/* Voice Spec */}
-                 <div className="bg-white/[0.03] border border-white/5 rounded-lg p-3 flex flex-col justify-center">
-                    <span className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1 flex items-center gap-1">
-                        <Radio size={10} /> Voice
-                    </span>
-                    <span className="text-sm text-zinc-200 font-medium truncate">{asst.voice.provider}</span>
+              {/* Specs Boxes */}
+              <div className="grid grid-cols-2 gap-3 mb-auto">
+                 {/* Voice Box */}
+                 <div className="bg-black/40 border border-zinc-800 rounded-xl p-3 flex flex-col justify-center h-20">
+                    <div className="flex items-center gap-2 mb-1">
+                        <Radio size={12} className="text-zinc-500" />
+                        <span className="text-[10px] text-zinc-500 font-semibold uppercase tracking-wider">Voice</span>
+                    </div>
+                    <span className="text-white font-medium truncate">{asst.voice.provider}</span>
                  </div>
-                 {/* Model Spec */}
-                 <div className="bg-white/[0.03] border border-white/5 rounded-lg p-3 flex flex-col justify-center">
-                    <span className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1 flex items-center gap-1">
-                        <Cpu size={10} /> Model
-                    </span>
-                    <span className="text-sm text-zinc-200 font-medium truncate">{asst.model.model}</span>
+                 {/* Model Box */}
+                 <div className="bg-black/40 border border-zinc-800 rounded-xl p-3 flex flex-col justify-center h-20">
+                    <div className="flex items-center gap-2 mb-1">
+                        <Cpu size={12} className="text-zinc-500" />
+                        <span className="text-[10px] text-zinc-500 font-semibold uppercase tracking-wider">Model</span>
+                    </div>
+                    <span className="text-white font-medium truncate">{asst.model.model}</span>
                  </div>
               </div>
 
-              {/* Footer Actions */}
-              <div className="flex items-center gap-3 mt-auto">
+              {/* Footer Row */}
+              <div className="flex items-center gap-3 mt-6">
+                 {/* Active Status (Visual only in clone) */}
+                 <div className="flex items-center gap-2 mr-auto">
+                    <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
+                    <span className="text-xs font-bold text-zinc-500 tracking-wider uppercase">Active</span>
+                 </div>
+
+                 {/* Edit Button (Wide) */}
                  <button 
                     onClick={() => handleSelect(asst)}
-                    className="flex-1 bg-white text-black hover:bg-zinc-200 h-9 rounded-lg text-sm font-semibold transition-colors shadow-lg shadow-white/5"
+                    className="flex-1 bg-white text-black hover:bg-zinc-200 h-10 rounded-lg text-sm font-bold transition-colors shadow-lg shadow-white/5"
                  >
                     Edit
                  </button>
+
+                 {/* Arrow Button */}
                  <button 
-                    onClick={() => handleSelect(asst)} // In real app, maybe open a modal directly
-                    className="h-9 w-9 flex items-center justify-center rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white border border-zinc-700 transition-colors"
-                    title="Quick Test"
+                    onClick={() => handleSelect(asst)}
+                    className="h-10 w-10 flex items-center justify-center rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white border border-zinc-700 transition-colors"
                  >
-                    <Terminal size={16} />
+                    <ChevronRight size={18} />
                  </button>
               </div>
             </div>
@@ -442,22 +500,28 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
       </div>
       
       {/* Delete Confirmation Modal (List View Context) */}
-      {showDeleteConfirm && assistantToDelete && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
-             <div className="bg-vapi-card border border-vapi-border rounded-xl w-full max-w-sm shadow-2xl p-6 border-red-500/20">
+      <Modal
+        isOpen={showDeleteConfirm}
+        onClose={() => setShowDeleteConfirm(false)}
+        onClosed={() => setAssistantToDelete(null)}
+        className="max-w-sm"
+      >
+             <div className="bg-vapi-card border border-vapi-border rounded-xl shadow-2xl p-6 border-red-500/20">
                 <div className="flex items-center gap-3 mb-4 text-white">
                   <div className="p-3 bg-red-500/10 rounded-full text-red-500">
                     <AlertTriangle size={24} />
                   </div>
                   <h3 className="text-lg font-bold">Delete Assistant?</h3>
                 </div>
-                <p className="text-zinc-400 text-sm mb-6">
-                  Are you sure you want to delete <span className="text-white font-medium">{assistantToDelete.name}</span>? 
-                  This action cannot be undone.
-                </p>
+                {assistantToDelete && (
+                    <p className="text-zinc-400 text-sm mb-6">
+                    Are you sure you want to delete <span className="text-white font-medium">{assistantToDelete.name}</span>? 
+                    This action cannot be undone.
+                    </p>
+                )}
                 <div className="flex justify-end gap-3">
                   <button 
-                    onClick={() => { setShowDeleteConfirm(false); setAssistantToDelete(null); }}
+                    onClick={() => setShowDeleteConfirm(false)}
                     className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg font-medium transition-colors"
                   >
                     Cancel
@@ -470,13 +534,16 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
                   </button>
                 </div>
              </div>
-          </div>
-        )}
+      </Modal>
       
       {/* API Key Modal (List View Context) */}
-      {showApiKeyModal && !editedAssistant && (
-           <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
-           <div className="bg-vapi-card border border-vapi-border rounded-xl w-full max-w-md shadow-2xl p-6">
+      <Modal
+         isOpen={showApiKeyModal}
+         onClose={() => setShowApiKeyModal(false)}
+         onClosed={() => setPendingAction(null)}
+         className="max-w-md"
+      >
+           <div className="bg-vapi-card border border-vapi-border rounded-xl shadow-2xl p-6">
               <div className="flex items-center gap-2 mb-4 text-white">
                 <Key className="text-vapi-accent" size={20} />
                 <h3 className="text-lg font-bold">Enter Vapi Private Key</h3>
@@ -494,10 +561,7 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
               />
               <div className="flex justify-end gap-3">
                 <button 
-                  onClick={() => {
-                      setShowApiKeyModal(false);
-                      setPendingAction(null);
-                  }}
+                  onClick={() => setShowApiKeyModal(false)}
                   className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg font-medium transition-colors"
                 >
                   Cancel
@@ -511,8 +575,7 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
                 </button>
               </div>
            </div>
-        </div>
-      )}
+      </Modal>
 
     </div>
   );
@@ -520,7 +583,7 @@ export const Assistants: React.FC<AssistantsProps> = ({ assistants, setAssistant
 
 // --- Assistant Editor Component ---
 
-const AssistantEditor: React.FC<{ 
+export const AssistantEditor: React.FC<{ 
   assistant: Assistant; 
   onChange: (a: Assistant) => void; 
   onBack: () => void;
@@ -532,20 +595,25 @@ const AssistantEditor: React.FC<{
 }> = ({ assistant, onChange, onBack, onSave, onDelete, hasChanges, isSaving, orgName }) => {
   const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState<'model' | 'voice' | 'transcriber'>('model');
-  const [promptGoal, setPromptGoal] = useState('');
-  const [isGenerating, setIsGenerating] = useState(false);
   const [isTestOpen, setIsTestOpen] = useState(true);
   const [voiceSearch, setVoiceSearch] = useState('');
-  const [previewText, setPreviewText] = useState("Hello! I am your AI assistant. How can I help you today?");
-  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
 
   const isDraft = assistant.id.startsWith('asst_draft_');
   const suffix = ` - ${orgName}`;
   const hasSuffix = assistant.name.endsWith(suffix);
   const displayName = (hasSuffix) ? assistant.name.slice(0, -suffix.length) : assistant.name;
+  
+  // Calculate allowed chars for the base name
+  const maxBaseLength = Math.max(0, 40 - suffix.length);
 
   const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const newBaseName = e.target.value;
+      let newBaseName = e.target.value;
+      
+      // Enforce limit
+      if (newBaseName.length > maxBaseLength) {
+          newBaseName = newBaseName.substring(0, maxBaseLength);
+      }
+
       if (isDraft) {
           onChange({ ...assistant, name: newBaseName });
       } else {
@@ -554,42 +622,8 @@ const AssistantEditor: React.FC<{
       }
   };
 
-  const handleGeneratePrompt = async () => {
-    if (!promptGoal) return;
-    setIsGenerating(true);
-    const generated = await generateSystemPrompt(assistant.name, promptGoal);
-    onChange({
-      ...assistant,
-      model: {
-        ...assistant.model,
-        systemPrompt: generated
-      }
-    });
-    setIsGenerating(false);
-  };
-
-  const handleVoicePreview = async () => {
-    if (!previewText) return;
-    setIsPreviewLoading(true);
-    const voiceMap: Record<string, string> = {
-      'rachel': 'Kore',
-      'larry': 'Fenrir',
-      'default': 'Puck'
-    };
-    const geminiVoice = voiceMap[assistant.voice.voiceId] || 'Puck';
-    
-    try {
-      await generateSpeech(previewText, geminiVoice);
-    } catch (e) {
-      console.error(e);
-      showToast("Failed to generate speech preview.", "error");
-    } finally {
-      setIsPreviewLoading(false);
-    }
-  };
-
   return (
-    <div className="h-[calc(100vh-2rem)] flex flex-col animate-fade-in">
+    <div className="h-[calc(100vh-2rem)] flex flex-col animate-fade-in z-50 relative w-full">
       <div className="flex items-center justify-between mb-6 pb-4 border-b border-white/5">
         <div className="flex items-center gap-4">
           <button onClick={onBack} className="p-2 hover:bg-white/5 rounded-lg text-zinc-400 hover:text-white transition-colors">
@@ -602,6 +636,7 @@ const AssistantEditor: React.FC<{
                 onChange={handleNameChange}
                 className="bg-transparent text-xl font-bold text-white focus:outline-none focus:border-b focus:border-vapi-accent pb-0.5 min-w-[200px]"
                 placeholder="Assistant Name"
+                maxLength={maxBaseLength}
                />
                {(isDraft || hasSuffix) && (
                  <span className="text-xl font-bold text-zinc-500 select-none pb-0.5 whitespace-nowrap">
@@ -611,8 +646,11 @@ const AssistantEditor: React.FC<{
              </div>
              <div className="flex items-center gap-2 text-xs text-zinc-500 mt-1">
                <span className="font-mono">{assistant.id}</span>
-               <span className="w-1 h-1 rounded-full bg-emerald-500"></span>
+               <span className="w-1 h-1 rounded-full bg-vapi-accent"></span>
                <span>{assistant.id.startsWith('asst_draft') ? 'Draft' : 'Active'}</span>
+               {maxBaseLength < 10 && (
+                   <span className="text-orange-500 ml-2">(Max Length Reached)</span>
+               )}
              </div>
           </div>
         </div>
@@ -640,7 +678,7 @@ const AssistantEditor: React.FC<{
             type="button"
             onClick={onSave}
             disabled={!hasChanges || isSaving}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${hasChanges ? 'bg-vapi-accent hover:bg-teal-300 text-black' : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'}`}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${hasChanges ? 'bg-vapi-accent hover:bg-orange-500 text-black' : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'}`}
           >
             {isSaving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
             <span>{isSaving ? 'Saving...' : 'Publish'}</span>
@@ -655,7 +693,7 @@ const AssistantEditor: React.FC<{
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab as any)}
-                className={`px-4 py-1.5 rounded-md text-sm font-medium capitalize transition-all ${activeTab === tab ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
+                className={`px-4 py-1.5 rounded-md text-sm font-medium capitalize transition-all focus:outline-none focus:ring-0 ${activeTab === tab ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
               >
                 {tab}
               </button>
@@ -669,30 +707,30 @@ const AssistantEditor: React.FC<{
                 <div className="grid grid-cols-2 gap-4 mb-4">
                   <div>
                     <label className="block text-xs text-zinc-500 mb-1.5">Provider</label>
-                    <select 
-                      value={assistant.model.provider}
-                      onChange={(e) => onChange({...assistant, model: {...assistant.model, provider: e.target.value}})}
-                      className="w-full bg-black/40 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:border-vapi-accent outline-none"
-                    >
-                      <option value="openai">OpenAI</option>
-                      <option value="anthropic">Anthropic</option>
-                      <option value="google">Google Gemini</option>
-                      <option value="groq">Groq</option>
-                    </select>
+                    <CustomSelect 
+                        value={assistant.model.provider}
+                        onChange={(val) => onChange({...assistant, model: {...assistant.model, provider: val}})}
+                        options={[
+                            { value: 'openai', label: 'OpenAI' },
+                            { value: 'anthropic', label: 'Anthropic' },
+                            { value: 'google', label: 'Google Gemini' },
+                            { value: 'groq', label: 'Groq' }
+                        ]}
+                    />
                   </div>
                   <div>
                     <label className="block text-xs text-zinc-500 mb-1.5">Model</label>
-                    <select 
-                      value={assistant.model.model}
-                      onChange={(e) => onChange({...assistant, model: {...assistant.model, model: e.target.value}})}
-                      className="w-full bg-black/40 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:border-vapi-accent outline-none"
-                    >
-                      <option value="gpt-4">GPT-4</option>
-                      <option value="gpt-4-turbo">GPT-4 Turbo</option>
-                      <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
-                      <option value="claude-3-opus">Claude 3 Opus</option>
-                      <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
-                    </select>
+                    <CustomSelect 
+                        value={assistant.model.model}
+                        onChange={(val) => onChange({...assistant, model: {...assistant.model, model: val}})}
+                        options={[
+                            { value: 'gpt-4', label: 'GPT-4' },
+                            { value: 'gpt-4-turbo', label: 'GPT-4 Turbo' },
+                            { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo' },
+                            { value: 'claude-3-opus', label: 'Claude 3 Opus' },
+                            { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' }
+                        ]}
+                    />
                   </div>
                 </div>
                 <div>
@@ -706,28 +744,6 @@ const AssistantEditor: React.FC<{
                     className="w-full bg-black/40 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-300 focus:border-vapi-accent outline-none font-mono min-h-[300px] resize-y"
                     placeholder="You are a helpful assistant..."
                   />
-                  <div className="mt-4 p-4 bg-black/40 rounded-lg border border-zinc-800">
-                    <div className="flex items-center gap-2 mb-2 text-vapi-accent text-sm font-medium">
-                      <Sparkles size={16} />
-                      <span>Generate with Gemini</span>
-                    </div>
-                    <div className="flex gap-2">
-                      <input 
-                        type="text" 
-                        value={promptGoal}
-                        onChange={(e) => setPromptGoal(e.target.value)}
-                        placeholder="e.g. A dentist receptionist who books appointments..."
-                        className="flex-1 bg-black border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:border-vapi-accent outline-none"
-                      />
-                      <button 
-                        onClick={handleGeneratePrompt}
-                        disabled={isGenerating || !promptGoal}
-                        className="bg-zinc-800 hover:bg-zinc-700 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-                      >
-                        {isGenerating ? '...' : 'Generate'}
-                      </button>
-                    </div>
-                  </div>
                 </div>
               </div>
             </div>
@@ -740,16 +756,16 @@ const AssistantEditor: React.FC<{
                  <div className="grid grid-cols-2 gap-4">
                    <div>
                      <label className="block text-xs text-zinc-500 mb-1.5">Provider</label>
-                     <select 
-                       value={assistant.voice.provider}
-                       onChange={(e) => onChange({...assistant, voice: {...assistant.voice, provider: e.target.value}})}
-                       className="w-full bg-black/40 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:border-vapi-accent outline-none"
-                     >
-                       <option value="11labs">11Labs</option>
-                       <option value="playht">PlayHT</option>
-                       <option value="deepgram">Deepgram</option>
-                       <option value="openai">OpenAI</option>
-                     </select>
+                     <CustomSelect 
+                        value={assistant.voice.provider}
+                        onChange={(val) => onChange({...assistant, voice: {...assistant.voice, provider: val}})}
+                        options={[
+                            { value: '11labs', label: '11Labs' },
+                            { value: 'playht', label: 'PlayHT' },
+                            { value: 'deepgram', label: 'Deepgram' },
+                            { value: 'openai', label: 'OpenAI' }
+                        ]}
+                     />
                    </div>
                    <div>
                      <label className="block text-xs text-zinc-500 mb-1.5">
@@ -758,7 +774,7 @@ const AssistantEditor: React.FC<{
                       <input 
                         value={assistant.voice.voiceId}
                         onChange={(e) => onChange({...assistant, voice: {...assistant.voice, voiceId: e.target.value}})}
-                        className="w-full bg-black/40 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:border-vapi-accent outline-none font-mono"
+                        className="w-full bg-black/40 border border-zinc-700 rounded-lg px-3 py-2.5 text-sm text-white focus:border-vapi-accent outline-none font-mono"
                         placeholder="e.g. 21m00Tcm4TlvDq8ikWAM"
                       />
                       <p className="text-[10px] text-zinc-500 mt-1.5 leading-relaxed">
@@ -767,7 +783,7 @@ const AssistantEditor: React.FC<{
                       {assistant.voice.provider === '11labs' && (
                         <div className="mt-5 pt-4 border-t border-zinc-800">
                            <div className="flex items-center justify-between mb-3">
-                              <span className="text-xs font-semibold text-zinc-300">Preset Voice Options <span className="text-zinc-600 font-normal ml-1">enum</span></span>
+                              <span className="text-xs font-semibold text-zinc-300">Preset Voice Options <span className="text-zinc-600 font-normal">enum</span></span>
                            </div>
                            <div className="bg-black/20 border border-zinc-800 rounded-lg p-3">
                               <div className="relative mb-3">
@@ -790,7 +806,7 @@ const AssistantEditor: React.FC<{
                                       <button
                                           key={voice}
                                           onClick={() => onChange({...assistant, voice: { ...assistant.voice, voiceId: voice }})}
-                                          className={`px-2 py-1.5 rounded text-xs font-medium border transition-all truncate
+                                          className={`px-2 py-1.5 rounded text-xs font-medium border transition-all truncate focus:outline-none focus:ring-0
                                               ${assistant.voice.voiceId === voice 
                                                   ? 'bg-zinc-100 text-black border-white shadow-[0_0_10px_rgba(255,255,255,0.2)]' 
                                                   : 'bg-zinc-900 text-zinc-400 border-zinc-800 hover:border-zinc-600 hover:text-zinc-200'
@@ -808,30 +824,6 @@ const AssistantEditor: React.FC<{
                       )}
                    </div>
                  </div>
-                 <div className="mt-6 p-4 bg-black/40 rounded-lg border border-zinc-800">
-                    <h4 className="text-xs font-medium text-zinc-400 mb-3 flex items-center gap-2">
-                       <Volume2 size={14} /> Voice Preview
-                    </h4>
-                    <div className="flex gap-2">
-                      <input 
-                        type="text"
-                        value={previewText}
-                        onChange={(e) => setPreviewText(e.target.value)}
-                        className="flex-1 bg-black border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:border-vapi-accent outline-none"
-                      />
-                      <button 
-                        onClick={handleVoicePreview}
-                        disabled={isPreviewLoading || !previewText}
-                        className="bg-vapi-accent hover:bg-teal-300 text-black px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                         {isPreviewLoading ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} fill="currentColor" />}
-                         Play
-                      </button>
-                    </div>
-                    <p className="text-[10px] text-zinc-500 mt-2">
-                      * Uses Gemini TTS for preview in this clone.
-                    </p>
-                 </div>
                </div>
              </div>
           )}
@@ -843,27 +835,27 @@ const AssistantEditor: React.FC<{
                  <div className="grid grid-cols-2 gap-4">
                    <div>
                      <label className="block text-xs text-zinc-500 mb-1.5">Provider</label>
-                     <select 
-                       value={assistant.transcriber.provider}
-                       onChange={(e) => onChange({...assistant, transcriber: {...assistant.transcriber, provider: e.target.value}})}
-                       className="w-full bg-black/40 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:border-vapi-accent outline-none"
-                     >
-                       <option value="deepgram">Deepgram</option>
-                       <option value="talkscriber">Talkscriber</option>
-                     </select>
+                     <CustomSelect 
+                        value={assistant.transcriber.provider}
+                        onChange={(val) => onChange({...assistant, transcriber: {...assistant.transcriber, provider: val}})}
+                        options={[
+                            { value: 'deepgram', label: 'Deepgram' },
+                            { value: 'talkscriber', label: 'Talkscriber' }
+                        ]}
+                     />
                    </div>
                    <div>
                      <label className="block text-xs text-zinc-500 mb-1.5">Language</label>
-                      <select 
+                      <CustomSelect 
                         value={assistant.transcriber.language}
-                        onChange={(e) => onChange({...assistant, transcriber: {...assistant.transcriber, language: e.target.value}})}
-                        className="w-full bg-black/40 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:border-vapi-accent outline-none"
-                      >
-                        <option value="en">English</option>
-                        <option value="es">Spanish</option>
-                        <option value="fr">French</option>
-                        <option value="de">German</option>
-                      </select>
+                        onChange={(val) => onChange({...assistant, transcriber: {...assistant.transcriber, language: val}})}
+                        options={[
+                            { value: 'en', label: 'English' },
+                            { value: 'es', label: 'Spanish' },
+                            { value: 'fr', label: 'French' },
+                            { value: 'de', label: 'German' }
+                        ]}
+                      />
                    </div>
                  </div>
               </div>
@@ -888,7 +880,7 @@ const AssistantEditor: React.FC<{
   );
 };
 
-const BotIcon = () => (
+export const BotIcon = () => (
   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M12 8V4H8" />
     <rect width="16" height="12" x="4" y="8" rx="2" />
@@ -899,7 +891,7 @@ const BotIcon = () => (
   </svg>
 );
 
-const Playground: React.FC<{ systemPrompt: string }> = ({ systemPrompt }) => {
+export const Playground: React.FC<{ systemPrompt: string }> = ({ systemPrompt }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -919,15 +911,11 @@ const Playground: React.FC<{ systemPrompt: string }> = ({ systemPrompt }) => {
     setInput('');
     setIsLoading(true);
 
-    try {
-      const response = await chatWithAssistant(systemPrompt, messages, input);
-      setMessages(prev => [...prev, { role: 'model', content: response }]);
-    } catch (error) {
-      console.error(error);
-      setMessages(prev => [...prev, { role: 'model', content: "Error communicating with assistant." }]);
-    } finally {
-      setIsLoading(false);
-    }
+    // Simulated response
+    setTimeout(() => {
+        setMessages(prev => [...prev, { role: 'model', content: "Hello! This is a simulated response from the assistant. I am currently operating in test mode." }]);
+        setIsLoading(false);
+    }, 1000);
   };
 
   return (
@@ -967,7 +955,7 @@ const Playground: React.FC<{ systemPrompt: string }> = ({ systemPrompt }) => {
           <button 
             onClick={handleSend}
             disabled={isLoading || !input.trim()}
-            className="bg-vapi-accent hover:bg-teal-300 text-black px-3 py-2 rounded-lg transition-colors disabled:opacity-50"
+            className="bg-vapi-accent hover:bg-orange-500 text-black px-3 py-2 rounded-lg transition-colors disabled:opacity-50"
           >
             <MessageSquare size={18} />
           </button>

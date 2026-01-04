@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Organization, Assistant } from '../types';
 import { supabaseService } from '../services/supabaseClient';
 import { updateVapiAssistant } from '../services/vapiService';
 import { VAPI_PRIVATE_KEY } from '../constants';
 import { useToast } from '../components/ToastProvider';
-import { Building2, Lock, Save, Loader2, Info } from 'lucide-react';
+import { Building2, Lock, Save, Loader2, Info, Users, Plus, Trash2, Mail, AlertTriangle } from 'lucide-react';
+import { Modal } from '../components/Modal';
 
 interface SettingsProps {
   org: Organization;
@@ -17,8 +18,124 @@ export const Settings: React.FC<SettingsProps> = ({ org, onUpdateOrg, assistants
   const { showToast } = useToast();
   
   const [orgName, setOrgName] = useState(org.name);
-  const [password, setPassword] = useState(''); // Only update if non-empty
+  const [password, setPassword] = useState(''); 
   const [isSaving, setIsSaving] = useState(false);
+  const [isMemberLoading, setIsMemberLoading] = useState(false);
+  const [currentUser, setCurrentUser] = useState<string | null>(null);
+
+  // Invite Members State
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [members, setMembers] = useState<string[]>(org.members || []);
+
+  // Delete Modal State
+  const [memberToDelete, setMemberToDelete] = useState<string | null>(null);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+
+  useEffect(() => {
+      // Check current user to determine if they are the owner
+      supabaseService.getCurrentUser().then(u => {
+          if (u) setCurrentUser(u.id);
+      });
+  }, []);
+
+  // Sync state with prop changes
+  useEffect(() => {
+    setOrgName(org.name);
+    setMembers(org.members || []);
+    setInviteEmail('');
+    setPassword('');
+  }, [org]);
+
+  // Check if current user is the owner
+  const isOwner = currentUser === org.id;
+
+  const handleInvite = async (e: React.FormEvent | React.MouseEvent) => {
+      e.preventDefault();
+      const emailToAdd = inviteEmail.trim().toLowerCase();
+      
+      if (!emailToAdd) return;
+      
+      if (!emailToAdd.includes('@')) {
+          showToast('Please enter a valid email address.', 'warning');
+          return;
+      }
+
+      if (members.map(m => m.toLowerCase()).includes(emailToAdd)) {
+          showToast('User already invited.', 'warning');
+          return;
+      }
+
+      setIsMemberLoading(true);
+
+      try {
+          // 1. Create the user account using the default password '123456'
+          const defaultPassword = '123456';
+          const { error: createError } = await supabaseService.createIsolatedUser(
+              emailToAdd, 
+              defaultPassword,
+              { org_name: 'My Organization' } // Metadata for trigger
+          );
+
+          if (createError) {
+              const msg = createError.message || '';
+              // If user already exists, we just proceed to invite them to the org
+              if (!msg.toLowerCase().includes('already registered')) {
+                  throw new Error(`Failed to create user: ${msg}`);
+              }
+          }
+
+          // 2. Add to Members list
+          const newMembers = [...members, emailToAdd];
+          const partialUpdate = { 
+              id: org.id,
+              members: newMembers 
+          };
+          await supabaseService.updateOrganization(partialUpdate);
+
+          // Update parent state
+          onUpdateOrg({ ...org, members: newMembers });
+          setMembers(newMembers);
+          setInviteEmail('');
+          showToast(`${emailToAdd} account created & invited successfully.`, 'success');
+
+      } catch (error: any) {
+          console.error("Invite failed:", error);
+          showToast(`Invite failed: ${error.message}`, 'error');
+      } finally {
+          setIsMemberLoading(false);
+      }
+  };
+
+  const promptRemoveMember = (email: string) => {
+      setMemberToDelete(email);
+      setIsDeleteModalOpen(true);
+  };
+
+  const confirmRemoveMember = async () => {
+      if (!memberToDelete) return;
+
+      setIsMemberLoading(true);
+      try {
+          // Use the secure RPC function to delete from auth.users AND members list
+          await supabaseService.deleteMember(memberToDelete, org.id);
+
+          // Update local state
+          const newMembers = members.filter(m => m.toLowerCase() !== memberToDelete.toLowerCase());
+          
+          // Force update local org object since RPC handled the DB
+          onUpdateOrg({ ...org, members: newMembers });
+          setMembers(newMembers);
+
+          showToast('User account deleted and removed from organization.', 'success');
+      } catch (error: any) {
+          console.error("Remove failed:", error);
+          showToast(`Failed to remove member: ${error.message}`, 'error');
+      } finally {
+          setIsMemberLoading(false);
+          setIsDeleteModalOpen(false);
+          setMemberToDelete(null);
+      }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -28,18 +145,28 @@ export const Settings: React.FC<SettingsProps> = ({ org, onUpdateOrg, assistants
         const oldOrgName = org.name;
         const newOrgName = orgName.trim();
         
-        // 1. Update Organization in DB
-        const updatedOrg = { ...org, name: newOrgName };
-        
-        // In a real Supabase Auth setup, updating password requires specific Auth API calls.
-        // For this clone, we are assuming the 'password' field in the 'organizations' table logic if used,
-        // or just simulating the update success.
-        
-        // Update local state and DB
-        await supabaseService.updateOrganization(updatedOrg);
-        onUpdateOrg(updatedOrg);
+        // 1. Update Organization Name
+        const partialUpdate = { 
+            id: org.id,
+            name: newOrgName,
+        };
 
-        // 2. Cascade Rename Assistants if Name Changed
+        await supabaseService.updateOrganization(partialUpdate);
+        
+        // Merge updates into the full object for local state
+        const updatedFullOrg = { ...org, ...partialUpdate };
+        onUpdateOrg(updatedFullOrg);
+
+        // 2. Update Password if provided
+        if (password) {
+            await supabaseService.updateUserPassword(password);
+            
+            // Also update the stored reference password for future invites
+            const passUpdate = { id: org.id, password: password };
+            await supabaseService.updateOrganization(passUpdate);
+        }
+
+        // 3. Cascade Rename Assistants if Name Changed
         if (oldOrgName !== newOrgName) {
             const orgAssistants = assistants.filter(a => a.orgId === org.id);
             const oldSuffix = ` - ${oldOrgName}`;
@@ -48,27 +175,22 @@ export const Settings: React.FC<SettingsProps> = ({ org, onUpdateOrg, assistants
             let updatedCount = 0;
             const updatedAssistantsList = [...assistants];
 
-            // Process sequentially to avoid rate limits if any
             for (const assistant of orgAssistants) {
-                let newBotName = assistant.name;
-
-                // Check if it has the old suffix
+                let baseName = assistant.name;
                 if (assistant.name.endsWith(oldSuffix)) {
-                    // Replace suffix
-                    newBotName = assistant.name.slice(0, -oldSuffix.length) + newSuffix;
-                } else {
-                    // Append suffix if it wasn't there (standardizing naming)
-                    newBotName = assistant.name + newSuffix;
+                    baseName = assistant.name.slice(0, -oldSuffix.length);
                 }
+                const maxBaseLength = Math.max(0, 40 - newSuffix.length);
+                if (baseName.length > maxBaseLength) {
+                    baseName = baseName.substring(0, maxBaseLength);
+                }
+                const newBotName = baseName + newSuffix;
 
                 if (newBotName !== assistant.name) {
-                    // Call Vapi
                     const updatedBot = await updateVapiAssistant(VAPI_PRIVATE_KEY, {
                         ...assistant,
                         name: newBotName
                     });
-
-                    // Update in local list copy
                     const index = updatedAssistantsList.findIndex(a => a.id === assistant.id);
                     if (index !== -1) {
                         updatedAssistantsList[index] = { ...updatedBot, orgId: org.id };
@@ -76,31 +198,28 @@ export const Settings: React.FC<SettingsProps> = ({ org, onUpdateOrg, assistants
                     updatedCount++;
                 }
             }
-
-            if (updatedCount > 0) {
-                setAssistants(updatedAssistantsList);
-                showToast(`Organization updated. Renamed ${updatedCount} assistants.`, 'success');
-            } else {
-                showToast('Organization updated successfully.', 'success');
-            }
+            setAssistants(updatedAssistantsList);
+            showToast(`Saved. ${updatedCount} assistants renamed.`, 'success');
         } else {
-            showToast('Organization settings saved.', 'success');
+             showToast('Settings saved successfully.', 'success');
         }
+        
+        if (password) setPassword(''); 
 
     } catch (error: any) {
         console.error("Settings Error:", error);
-        showToast("Failed to save settings.", 'error');
+        showToast(`Failed to save: ${error.message}`, 'error');
     } finally {
         setIsSaving(false);
     }
   };
 
   return (
-    <div className="space-y-6 animate-fade-in max-w-2xl">
+    <div className="space-y-6 animate-fade-in max-w-2xl pb-10">
       <h1 className="text-2xl font-bold text-white">Organization Settings</h1>
 
+      {/* General Info Form - Handles Name & Password */}
       <form onSubmit={handleSubmit} className="space-y-6">
-        {/* General Info Card */}
         <div className="bg-vapi-card border border-vapi-border rounded-xl p-6 space-y-6">
             <h2 className="text-lg font-medium text-white flex items-center gap-2">
                 <Building2 size={20} className="text-vapi-accent"/>
@@ -119,43 +238,24 @@ export const Settings: React.FC<SettingsProps> = ({ org, onUpdateOrg, assistants
                     />
                     <p className="text-xs text-zinc-500 mt-2 flex items-start gap-2">
                         <Info size={14} className="mt-0.5 shrink-0" />
-                        Renaming your organization will automatically update the names of all your assistants to include the new organization suffix (e.g., "Bot - {orgName}").
+                        Renaming updates assistant suffixes automatically (e.g., "Bot - {orgName}").
                     </p>
-                </div>
-
-                <div>
-                    <label className="block text-sm font-medium text-zinc-400 mb-1.5">Admin Email</label>
-                    <input 
-                        type="email"
-                        value={org.email || ''}
-                        disabled
-                        className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-4 py-2.5 text-zinc-500 cursor-not-allowed"
-                    />
-                </div>
-
-                <div>
-                    <label className="block text-sm font-medium text-zinc-400 mb-1.5">Organization ID</label>
-                    <div className="font-mono text-xs bg-zinc-950 p-3 rounded-lg border border-zinc-800 text-zinc-400 select-all">
-                        {org.id}
-                    </div>
                 </div>
             </div>
         </div>
 
-        {/* Security Card */}
         <div className="bg-vapi-card border border-vapi-border rounded-xl p-6 space-y-6">
             <h2 className="text-lg font-medium text-white flex items-center gap-2">
                 <Lock size={20} className="text-vapi-accent"/>
                 Security
             </h2>
-
             <div>
                 <label className="block text-sm font-medium text-zinc-400 mb-1.5">Update Password</label>
                 <input 
                     type="password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Leave blank to keep current password"
+                    placeholder="Enter new password to update"
                     className="w-full bg-black border border-zinc-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-vapi-accent transition-colors"
                     minLength={6}
                 />
@@ -166,13 +266,132 @@ export const Settings: React.FC<SettingsProps> = ({ org, onUpdateOrg, assistants
             <button 
                 type="submit"
                 disabled={isSaving}
-                className="flex items-center gap-2 bg-vapi-accent hover:bg-teal-300 text-black px-6 py-2.5 rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex items-center gap-2 bg-vapi-accent hover:bg-orange-500 text-black px-6 py-2.5 rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
                 {isSaving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
                 Save Changes
             </button>
         </div>
       </form>
+
+      {/* Team Members Section - Independent Actions */}
+      <div className="bg-vapi-card border border-vapi-border rounded-xl p-6 space-y-6">
+            <h2 className="text-lg font-medium text-white flex items-center gap-2">
+                <Users size={20} className="text-vapi-accent"/>
+                Team Members
+            </h2>
+            
+            <p className="text-sm text-zinc-500">
+                Auto-create accounts for team members with the default password <span className="text-white font-mono">123456</span>.
+            </p>
+
+            <div className="space-y-4">
+                 {/* Invite Input - Only Visible to Owner */}
+                 {isOwner && (
+                     <div className="flex gap-2">
+                        <div className="relative flex-1">
+                            <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" size={16} />
+                            <input 
+                                type="email"
+                                value={inviteEmail}
+                                onChange={(e) => setInviteEmail(e.target.value)}
+                                placeholder="Enter email address (e.g. colleague@company.com)"
+                                className="w-full bg-black border border-zinc-700 rounded-lg pl-10 pr-4 py-2.5 text-white focus:outline-none focus:border-vapi-accent transition-colors"
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        handleInvite(e);
+                                    }
+                                }}
+                                disabled={isMemberLoading}
+                            />
+                        </div>
+                        <button 
+                            type="button"
+                            onClick={handleInvite}
+                            disabled={!inviteEmail.trim() || isMemberLoading}
+                            className="px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg font-medium transition-colors disabled:opacity-50 flex items-center gap-2"
+                        >
+                            {isMemberLoading ? <Loader2 size={16} className="animate-spin" /> : 'Invite'}
+                        </button>
+                     </div>
+                 )}
+
+                 {/* Member List */}
+                 {members.length > 0 ? (
+                    <div className="bg-zinc-950/50 border border-zinc-800 rounded-lg overflow-hidden">
+                        {members.map((member, index) => (
+                            <div key={index} className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 last:border-0">
+                                <div className="flex items-center gap-3">
+                                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-zinc-700 to-zinc-900 flex items-center justify-center text-xs font-medium text-zinc-300">
+                                        {member.charAt(0).toUpperCase()}
+                                    </div>
+                                    <span className="text-sm text-zinc-300">{member}</span>
+                                </div>
+                                {isOwner && (
+                                    <button 
+                                        type="button"
+                                        onClick={(e) => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            promptRemoveMember(member);
+                                        }}
+                                        disabled={isMemberLoading}
+                                        className="p-1.5 text-zinc-500 hover:text-red-400 hover:bg-red-500/10 rounded-md transition-colors disabled:opacity-30 cursor-pointer"
+                                        title="Delete User & Remove Access"
+                                    >
+                                        <Trash2 size={16} />
+                                    </button>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                 ) : (
+                     <div className="text-center py-6 border border-dashed border-zinc-800 rounded-lg">
+                        <p className="text-sm text-zinc-500">No active invitations</p>
+                     </div>
+                 )}
+            </div>
+      </div>
+      
+      {/* Delete Member Confirmation Modal */}
+      <Modal 
+        isOpen={isDeleteModalOpen} 
+        onClose={() => setIsDeleteModalOpen(false)} 
+        onClosed={() => setMemberToDelete(null)}
+        className="max-w-sm"
+      >
+        <div className="bg-vapi-card border border-vapi-border rounded-xl shadow-2xl p-6 border-red-500/20">
+            <div className="flex items-center gap-3 mb-4 text-white">
+               <div className="p-3 bg-red-500/10 rounded-full text-red-500">
+                  <AlertTriangle size={24} />
+               </div>
+               <h3 className="text-lg font-bold">Delete Member?</h3>
+            </div>
+            
+            <p className="text-zinc-400 text-sm mb-6">
+               This will <strong>permanently delete</strong> the user account for <span className="text-white font-medium">{memberToDelete}</span> and remove them from your organization.
+            </p>
+
+            <div className="flex justify-end gap-3">
+               <button 
+                  onClick={() => setIsDeleteModalOpen(false)}
+                  className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg font-medium transition-colors"
+               >
+                  Cancel
+               </button>
+               <button 
+                  onClick={confirmRemoveMember}
+                  disabled={isMemberLoading}
+                  className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg font-bold transition-colors shadow-lg shadow-red-900/20 disabled:opacity-50 flex items-center gap-2"
+               >
+                  {isMemberLoading && <Loader2 size={16} className="animate-spin" />}
+                  Confirm Delete
+               </button>
+            </div>
+        </div>
+      </Modal>
+
     </div>
   );
 };

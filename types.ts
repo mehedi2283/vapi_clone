@@ -63,10 +63,12 @@ export interface Organization {
   id: string;
   name: string;
   email?: string; // Contact/Login Email
+  password?: string; // Stored password for admin/recovery
   role?: 'user' | 'admin'; // Access Level
   plan: 'trial' | 'pro' | 'enterprise';
   credits: number;
-  usageCost: number;
+  usage_cost: number;
   status: 'active' | 'suspended';
-  createdAt: string;
+  created_at: string;
+  members?: string[]; // List of invited emails
 }

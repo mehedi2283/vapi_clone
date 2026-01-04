@@ -1,10 +1,13 @@
 import React, { useState } from 'react';
 import { Organization, Assistant } from '../types';
-import { Building2, Plus, ArrowRight, DollarSign, Users, Activity, CreditCard, X, Link, Check, ClipboardCopy, Mail, Bot, Search, ArrowRightLeft, Shield, User, Lock, Edit, Trash2, ChevronLeft, ChevronRight, AlertTriangle, Loader2 } from 'lucide-react';
-import { generateSecureToken, updateVapiAssistant } from '../services/vapiService';
+import { Building2, Plus, ArrowRight, DollarSign, Users, Activity, CreditCard, X, Link, Check, ClipboardCopy, Mail, Bot, Search, ArrowRightLeft, Shield, User, Lock, Edit, Trash2, ChevronLeft, ChevronRight, AlertTriangle, Loader2, LogOut, Crown, CornerDownRight, ChevronDown } from 'lucide-react';
+import { generateSecureToken, updateVapiAssistant, deleteVapiAssistant } from '../services/vapiService';
 import { supabaseService } from '../services/supabaseClient';
 import { useToast } from '../components/ToastProvider';
 import { VAPI_PRIVATE_KEY } from '../constants';
+import { CustomSelect } from '../components/CustomSelect';
+import { AssistantEditor } from './Assistants';
+import { Modal } from '../components/Modal';
 
 interface MasterOverviewProps {
   organizations: Organization[];
@@ -14,6 +17,8 @@ interface MasterOverviewProps {
   onAddOrg: (org: Organization) => void;
   onDeleteOrg: (orgId: string) => void;
   onTransferAssistant: (assistant: Assistant, targetOrgId: string) => void;
+  onUpdateAssistant: (assistant: Assistant) => void;
+  onDeleteAssistant: (assistantId: string) => void;
 }
 
 export const MasterOverview: React.FC<MasterOverviewProps> = ({ 
@@ -23,19 +28,29 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
     onUpdateOrg, 
     onAddOrg, 
     onDeleteOrg,
-    onTransferAssistant 
+    onTransferAssistant,
+    onUpdateAssistant,
+    onDeleteAssistant
 }) => {
   const { showToast } = useToast();
+  
+  // State for Add Credit Modal
   const [selectedOrgForCredit, setSelectedOrgForCredit] = useState<Organization | null>(null);
+  const [isCreditModalOpen, setIsCreditModalOpen] = useState(false);
   const [creditAmount, setCreditAmount] = useState('');
   
-  // Edit Org State
+  // State for Edit Org Modal
   const [editingOrg, setEditingOrg] = useState<Organization | null>(null);
+  const [isEditOrgModalOpen, setIsEditOrgModalOpen] = useState(false);
 
-  // Delete Org State
+  // State for Delete Org Modal
   const [orgToDelete, setOrgToDelete] = useState<Organization | null>(null);
+  const [isDeleteOrgModalOpen, setIsDeleteOrgModalOpen] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] = useState('');
   const [isDeleting, setIsDeleting] = useState(false);
+  
+  // State for Status Menu
+  const [openStatusMenuId, setOpenStatusMenuId] = useState<string | null>(null);
 
   // Pagination State
   const [currentPage, setCurrentPage] = useState(1);
@@ -47,21 +62,71 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
   const [newOrgEmail, setNewOrgEmail] = useState('');
   const [newOrgPassword, setNewOrgPassword] = useState('');
   const [newOrgPlan, setNewOrgPlan] = useState<'trial' | 'pro' | 'enterprise'>('trial');
-  
   const [isCreating, setIsCreating] = useState(false);
   
-  // Bots Modal State
+  // Bots List Modal State
   const [showBotsModal, setShowBotsModal] = useState(false);
   const [botSearch, setBotSearch] = useState('');
+  
+  // Transfer Bot Modal State
   const [botToTransfer, setBotToTransfer] = useState<Assistant | null>(null);
+  const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
   const [targetOrgId, setTargetOrgId] = useState('');
   const [isTransferring, setIsTransferring] = useState(false);
+  
+  // Assistant Edit State
+  const [workingAssistant, setWorkingAssistant] = useState<Assistant | null>(null);
+  const [isAssistantEditorOpen, setIsAssistantEditorOpen] = useState(false);
+  const [assistantToEdit, setAssistantToEdit] = useState<Assistant | null>(null); // To track original
+  const [isSavingAssistant, setIsSavingAssistant] = useState(false);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
 
   // Copy Link State
   const [copiedOrgId, setCopiedOrgId] = useState<string | null>(null);
 
-  const totalUsage = organizations.reduce((acc, org) => acc + org.usageCost, 0);
+  const totalUsage = organizations.reduce((acc, org) => acc + org.usage_cost, 0);
   const totalCredits = organizations.reduce((acc, org) => acc + org.credits, 0);
+
+  // --- Helper Functions to Open/Close Modals ---
+  
+  const openCreditModal = (org: Organization) => {
+    setSelectedOrgForCredit(org);
+    setIsCreditModalOpen(true);
+  };
+  const closeCreditModal = () => setIsCreditModalOpen(false);
+
+  const openEditOrgModal = (org: Organization) => {
+    setEditingOrg(org);
+    setIsEditOrgModalOpen(true);
+  };
+  const closeEditOrgModal = () => setIsEditOrgModalOpen(false);
+
+  const openDeleteOrgModal = (org: Organization) => {
+    setOrgToDelete(org);
+    setDeleteConfirmation('');
+    setIsDeleteOrgModalOpen(true);
+  };
+  const closeDeleteOrgModal = () => setIsDeleteOrgModalOpen(false);
+
+  const openTransferModal = (bot: Assistant) => {
+      setBotToTransfer(bot);
+      setIsTransferModalOpen(true);
+  };
+  const closeTransferModal = () => setIsTransferModalOpen(false);
+
+  const openAssistantEditor = (bot: Assistant) => {
+      setAssistantToEdit(bot);
+      setWorkingAssistant(JSON.parse(JSON.stringify(bot)));
+      setHasUnsavedChanges(false);
+      setIsAssistantEditorOpen(true);
+  };
+  const closeAssistantEditor = () => setIsAssistantEditorOpen(false);
+
+  // Helper to find parent organization (if this org was invited by someone)
+  const getParentInfo = (email?: string) => {
+    if (!email) return null;
+    return organizations.find(o => o.members && o.members.some(m => m.toLowerCase() === email.toLowerCase()));
+  };
 
   // --- Sorting & Pagination Logic ---
   const sortedOrgs = [...organizations].sort((a, b) => {
@@ -100,7 +165,7 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
     await supabaseService.updateOrganization(updatedOrg);
 
     showToast(`Added $${amount} credits to ${selectedOrgForCredit.name}`, 'success');
-    setSelectedOrgForCredit(null);
+    closeCreditModal();
     setCreditAmount('');
   };
 
@@ -109,26 +174,44 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
     if (!newOrgName.trim() || !newOrgEmail.trim()) return;
 
     setIsCreating(true);
-    
-    const newId = (typeof crypto !== 'undefined' && crypto.randomUUID) 
-        ? crypto.randomUUID() 
-        : `org_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-
-    const newOrg: Organization = {
-      id: newId, 
-      name: newOrgName,
-      email: newOrgEmail,
-      role: 'user', // Default strictly to 'user'
-      plan: newOrgPlan,
-      credits: 10.00,
-      usageCost: 0.00,
-      status: 'active',
-      createdAt: new Date().toISOString()
-    };
 
     try {
-        const savedOrg = await supabaseService.createOrganization(newOrg, newOrgPassword);
-        onAddOrg(savedOrg || newOrg);
+        // Use isolated client to create user without disrupting current admin session
+        const { user, error } = await supabaseService.createIsolatedUser(newOrgEmail, newOrgPassword, { org_name: newOrgName });
+        
+        if (error) throw error;
+        if (!user) throw new Error("Failed to create user account");
+
+        // Check if the trigger already created the org
+        const existingOrg = await supabaseService.getOrganizationById(user.id);
+        
+        let savedOrg: Organization;
+
+        if (existingOrg) {
+             // Org created by trigger. Update details.
+             savedOrg = { 
+                 ...existingOrg, 
+                 plan: newOrgPlan,
+                 password: newOrgPassword 
+             };
+             await supabaseService.updateOrganization(savedOrg);
+        } else {
+             // Fallback: Manually create org if trigger didn't fire
+             const newOrg: Organization = {
+                id: user.id, 
+                name: newOrgName,
+                email: newOrgEmail,
+                role: 'user',
+                plan: newOrgPlan,
+                credits: 10.00,
+                usage_cost: 0.00,
+                status: 'active',
+                created_at: new Date().toISOString()
+            };
+            savedOrg = await supabaseService.createOrganization(newOrg, newOrgPassword);
+        }
+
+        onAddOrg(savedOrg);
         
         setShowAddModal(false);
         setNewOrgName('');
@@ -138,7 +221,41 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
         showToast('Organization created successfully!', 'success');
     } catch (err: any) {
         console.error("Create Org Error:", err);
-        const msg = err instanceof Error ? err.message : JSON.stringify(err);
+        
+        let msg = "Unknown error";
+        
+        if (typeof err === 'string') {
+            msg = err;
+        } else if (err instanceof Error) {
+            msg = err.message;
+        } else if (err && typeof err === 'object') {
+            if (err.message) msg = err.message;
+            else if (err.error_description) msg = err.error_description;
+            else if (err.msg) msg = err.msg;
+            else if (typeof err.error === 'string') msg = err.error;
+            else {
+                try {
+                    const json = JSON.stringify(err);
+                    if (json === '{}' || json === '[]') {
+                        // Sometimes Error objects stringify to {}
+                        msg = err.toString ? err.toString() : "An unexpected error occurred";
+                        if (msg === '[object Object]') msg = "An error occurred during creation";
+                    } else {
+                        msg = json;
+                    }
+                } catch {
+                    msg = "An error occurred during creation";
+                }
+            }
+        }
+        
+        if (msg === '[object Object]') msg = "An unexpected system error occurred.";
+
+        // Friendly User Messages
+        if (msg.toLowerCase().includes('already registered')) {
+            msg = "User already registered. Cannot create duplicate account.";
+        }
+        
         showToast(`Failed to create organization: ${msg}`, 'error');
     } finally {
         setIsCreating(false);
@@ -152,17 +269,12 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
     try {
         await supabaseService.updateOrganization(editingOrg);
         onUpdateOrg(editingOrg);
-        setEditingOrg(null);
+        closeEditOrgModal();
         showToast('Organization updated successfully', 'success');
     } catch (err: any) {
         console.error("Failed to update org:", err);
         showToast("Failed to update organization.", 'error');
     }
-  };
-
-  const handleDeleteClick = (org: Organization) => {
-    setOrgToDelete(org);
-    setDeleteConfirmation('');
   };
 
   const confirmDeleteOrg = async () => {
@@ -172,13 +284,33 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
     setIsDeleting(true);
     try {
       await onDeleteOrg(orgToDelete.id);
-      setOrgToDelete(null);
-      setDeleteConfirmation('');
+      closeDeleteOrgModal();
       showToast('Organization deleted successfully', 'success');
     } catch (error) {
       showToast("Failed to delete organization", 'error');
     } finally {
       setIsDeleting(false);
+    }
+  };
+  
+  const handleStatusUpdate = async (org: Organization, newStatus: 'active' | 'suspended') => {
+    if (org.status === newStatus) {
+        setOpenStatusMenuId(null);
+        return;
+    }
+    
+    // Optimistic update
+    const updatedOrg = { ...org, status: newStatus };
+    onUpdateOrg(updatedOrg);
+    setOpenStatusMenuId(null);
+    
+    try {
+        await supabaseService.updateOrganization({ id: org.id, status: newStatus });
+        showToast(`Organization ${newStatus === 'active' ? 'activated' : 'suspended'}`, 'success');
+    } catch (e) {
+        // Revert on failure
+        onUpdateOrg(org);
+        showToast("Failed to update status", "error");
     }
   };
 
@@ -193,32 +325,43 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
         const currentOrgName = getOrgName(botToTransfer.orgId);
         const targetOrgName = getOrgName(targetOrgId);
         
-        // Logic to rename the bot
-        let newBotName = botToTransfer.name;
         const oldSuffix = ` - ${currentOrgName}`;
         const newSuffix = ` - ${targetOrgName}`;
-
-        if (newBotName.endsWith(oldSuffix)) {
-            newBotName = newBotName.slice(0, -oldSuffix.length) + newSuffix;
-        } else {
-            newBotName = newBotName + newSuffix;
+        
+        let baseName = botToTransfer.name;
+        
+        // Strip old suffix if present
+        if (baseName.endsWith(oldSuffix)) {
+            baseName = baseName.slice(0, -oldSuffix.length);
         }
+
+        // Vapi Limit is 40 chars. Ensure new name fits.
+        const maxBaseLength = Math.max(0, 40 - newSuffix.length);
+        if (baseName.length > maxBaseLength) {
+            baseName = baseName.substring(0, maxBaseLength);
+        }
+
+        const newBotName = baseName + newSuffix;
 
         // 1. Update Name in Vapi
         const updatedBot = await updateVapiAssistant(VAPI_PRIVATE_KEY, {
             ...botToTransfer,
             name: newBotName
         });
+        
+        // 2. Persist Mapping in Supabase (CRITICAL for "stickiness")
+        await supabaseService.saveAssistantMapping(updatedBot.id, targetOrgId);
 
-        // 2. Perform Transfer (Update Mapping)
+        // 3. Update Local State
         onTransferAssistant(updatedBot, targetOrgId);
 
         showToast(`Transferred and renamed to "${updatedBot.name}" successfully`, 'success');
-        setBotToTransfer(null);
+        closeTransferModal();
         setTargetOrgId('');
-    } catch (error) {
+    } catch (error: any) {
         console.error("Transfer failed", error);
-        showToast("Failed to transfer assistant", 'error');
+        // Display the actual error message from the Vapi service
+        showToast(`Failed to transfer: ${error.message}`, 'error');
     } finally {
         setIsTransferring(false);
     }
@@ -235,6 +378,46 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
     setTimeout(() => {
         setCopiedOrgId(null);
     }, 3000);
+  };
+
+  // --- Assistant Edit Logic ---
+  
+  const handleAssistantChange = (updated: Assistant) => {
+    setWorkingAssistant(updated);
+    setHasUnsavedChanges(true);
+  };
+  
+  const saveAssistantChanges = async () => {
+    if (!workingAssistant) return;
+    setIsSavingAssistant(true);
+    
+    try {
+        const updated = await updateVapiAssistant(VAPI_PRIVATE_KEY, workingAssistant);
+        onUpdateAssistant(updated);
+        closeAssistantEditor();
+        showToast(`Assistant "${updated.name}" updated successfully`, 'success');
+    } catch (e: any) {
+        showToast(`Failed to update assistant: ${e.message}`, 'error');
+    } finally {
+        setIsSavingAssistant(false);
+    }
+  };
+  
+  const deleteAssistant = async () => {
+    if (!workingAssistant) return;
+    if (!window.confirm(`Are you sure you want to delete ${workingAssistant.name}?`)) return;
+    
+    setIsSavingAssistant(true);
+    try {
+        await deleteVapiAssistant(VAPI_PRIVATE_KEY, workingAssistant.id);
+        onDeleteAssistant(workingAssistant.id);
+        closeAssistantEditor();
+        showToast('Assistant deleted successfully', 'success');
+    } catch (e: any) {
+        showToast(`Failed to delete: ${e.message}`, 'error');
+    } finally {
+        setIsSavingAssistant(false);
+    }
   };
 
 
@@ -259,13 +442,26 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
               <p className="text-zinc-400 text-sm">Manage organizations and billing</p>
             </div>
           </div>
-          <button 
-            onClick={() => setShowAddModal(true)}
-            className="flex items-center gap-2 bg-white text-black hover:bg-zinc-200 px-4 py-2 rounded-lg font-medium transition-colors"
-          >
-            <Plus size={18} />
-            <span>Add Organization</span>
-          </button>
+          <div className="flex items-center gap-4">
+              <button 
+                onClick={() => setShowAddModal(true)}
+                className="group/add flex items-center gap-2 bg-white text-black hover:bg-zinc-200 px-4 py-2 rounded-lg font-medium transition-colors"
+              >
+                <Plus size={18} className="group-hover/add:rotate-90 transition-transform duration-300" />
+                <span>Add Organization</span>
+              </button>
+              
+              <div className="h-6 w-px bg-zinc-800 mx-1"></div>
+              
+              <button 
+                onClick={() => supabaseService.signOut()}
+                className="flex items-center gap-2 text-zinc-400 hover:text-white hover:bg-zinc-800 px-3 py-2 rounded-lg transition-colors border border-transparent hover:border-zinc-700"
+                title="Log Out"
+              >
+                 <LogOut size={18} />
+                 <span className="text-sm font-medium">Log Out</span>
+              </button>
+          </div>
         </div>
 
         {/* Stats Grid */}
@@ -297,32 +493,88 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
         {/* Organizations List */}
         <div className="space-y-4">
           <h2 className="text-lg font-semibold text-white">Sub Accounts</h2>
-          <div className="bg-vapi-card border border-vapi-border rounded-xl overflow-hidden flex flex-col">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse min-w-[800px]">
+          <div className="w-full">
+              <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-zinc-900/50 border-b border-zinc-800 text-xs text-zinc-500 uppercase tracking-wider">
-                    <th className="px-6 py-4 font-medium">Organization</th>
-                    <th className="px-6 py-4 font-medium">Role</th>
-                    <th className="px-6 py-4 font-medium">Plan</th>
-                    <th className="px-6 py-4 font-medium">Credits</th>
-                    <th className="px-6 py-4 font-medium">Status</th>
-                    <th className="px-6 py-4 font-medium text-right">Actions</th>
+                    <th className="pl-6 pr-4 py-4 font-medium w-[32%]">Organization</th>
+                    <th className="px-6 py-4 font-medium w-[10%]">Role</th>
+                    <th className="px-6 py-4 font-medium w-[15%]">Plan</th>
+                    <th className="px-6 py-4 font-medium w-[10%]">Credits</th>
+                    <th className="px-6 py-4 font-medium w-[10%]">Status</th>
+                    <th className="pl-6 pr-12 py-4 font-medium text-right w-[23%]">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-800/50 text-sm">
-                  {currentOrgs.map(org => (
+                  {currentOrgs.map(org => {
+                    // Check if this org was invited by another org
+                    const parent = getParentInfo(org.email);
+                    
+                    return (
                     <tr key={org.id} className="group hover:bg-zinc-900/40 transition-colors">
-                      <td className="px-6 py-4">
-                        <div className="flex flex-col gap-1">
+                      <td className="pl-6 pr-4 py-6 align-middle">
+                        <div className="flex flex-col gap-1.5">
                           <div className="flex items-center gap-2">
-                             <span className="text-white font-medium">{org.name}</span>
+                             <span className="text-white font-bold text-base truncate max-w-[220px]" title={org.name}>{org.name}</span>
+                             
+                             {/* Enhanced Crown Icon for Parent Orgs */}
+                             {org.members && org.members.length > 0 && (
+                                <div className="relative group/crown ml-2">
+                                    {/* Trigger */}
+                                    <div className="p-1.5 rounded-md bg-amber-500/10 text-amber-500 border border-amber-500/20 cursor-help hover:bg-amber-500/20 transition-colors">
+                                        <Crown size={12} className="fill-amber-500/20" />
+                                    </div>
+
+                                    {/* Tooltip Container */}
+                                    <div className="absolute left-0 top-full mt-2 w-72 bg-[#09090b] border border-zinc-800 rounded-xl shadow-[0_0_30px_-10px_rgba(0,0,0,0.8)] z-[100] opacity-0 invisible group-hover/crown:opacity-100 group-hover/crown:visible transition-all duration-300 ease-[cubic-bezier(0.23,1,0.32,1)] translate-y-2 group-hover/crown:translate-y-0 pointer-events-none">
+                                        
+                                        {/* Header */}
+                                        <div className="p-3 border-b border-zinc-800 bg-zinc-900/50 rounded-t-xl flex items-center justify-between">
+                                            <div className="flex items-center gap-2">
+                                                <Crown size={14} className="text-amber-500 fill-amber-500/20" />
+                                                <span className="text-xs font-bold text-zinc-100">Parent Organization</span>
+                                            </div>
+                                            <div className="bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded text-[10px] font-bold text-amber-500">
+                                                OWNER
+                                            </div>
+                                        </div>
+
+                                        {/* Content */}
+                                        <div className="p-3">
+                                            <div className="flex items-center justify-between mb-3">
+                                                <span className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider">Invited Organizations</span>
+                                                <span className="text-xs font-mono text-zinc-300">Invited {org.members.length} Orgs</span>
+                                            </div>
+
+                                            <div className="space-y-1 max-h-[150px] overflow-y-auto pr-1">
+                                                {org.members.map((email, idx) => (
+                                                    <div key={idx} className="flex items-center gap-2.5 p-2 rounded-lg bg-zinc-900/50 border border-zinc-800/50 hover:border-zinc-700 transition-colors">
+                                                        <div className="w-6 h-6 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-[10px] font-bold text-white shadow-inner">
+                                                            {email.charAt(0).toUpperCase()}
+                                                        </div>
+                                                        <div className="flex flex-col min-w-0">
+                                                            <span className="text-xs text-zinc-300 truncate font-medium">{email}</span>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                             )}
                           </div>
-                          {org.email && <span className="text-zinc-500 text-xs">{org.email}</span>}
-                          <span className="text-zinc-600 text-[10px] font-mono">{org.id.substring(0, 10)}...</span>
+                          <div className="flex items-center gap-1.5">
+                             {org.email ? (
+                                 <span className="text-zinc-500 text-xs font-medium truncate max-w-[220px]">{org.email}</span>
+                             ) : (
+                                 <span className="text-zinc-500 text-xs italic">No email</span>
+                             )}
+                          </div>
+                          
+                          <span className="text-zinc-700 text-[10px] font-mono tracking-wide">{org.id.substring(0, 18)}...</span>
                         </div>
                       </td>
-                      <td className="px-6 py-4">
+                      <td className="px-6 py-6 align-middle">
                         {org.role === 'admin' ? (
                             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-amber-500/10 text-amber-500 border border-amber-500/20">
                                 <Shield size={12} className="fill-amber-500/20" />
@@ -335,9 +587,9 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
                             </span>
                         )}
                       </td>
-                      <td className="px-6 py-4">
+                      <td className="px-6 py-6 align-middle">
                         <button 
-                          onClick={() => setEditingOrg(org)} 
+                          onClick={() => openEditOrgModal(org)} 
                           className="group/plan flex items-center gap-2 hover:bg-zinc-800 px-2 py-1.5 rounded-lg transition-colors cursor-pointer"
                           title="Edit Plan"
                         >
@@ -347,66 +599,96 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
                                 'bg-zinc-800 text-zinc-400 border-zinc-700'}`}>
                               {org.plan.toUpperCase()}
                             </span>
-                            <Edit size={12} className="text-zinc-400" />
+                            <Edit size={12} className="text-zinc-400 hover:text-white transition-colors" />
                         </button>
                       </td>
-                      <td className="px-6 py-4 text-zinc-300 font-mono">${org.credits.toFixed(2)}</td>
-                      <td className="px-6 py-4">
-                        <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium
-                           ${org.status === 'active' ? 'text-emerald-400 bg-emerald-400/10' : 'text-red-400 bg-red-400/10'}`}>
-                           <span className={`w-1.5 h-1.5 rounded-full ${org.status === 'active' ? 'bg-emerald-400' : 'bg-red-400'}`}></span>
-                           {org.status}
-                        </span>
+                      {/* Removed Members Column */}
+                      <td className="px-6 py-6 align-middle text-zinc-300 font-mono font-medium">${org.credits.toFixed(2)}</td>
+                      <td className="px-6 py-6 align-middle relative">
+                        <div className="relative">
+                            <button 
+                                onClick={() => setOpenStatusMenuId(openStatusMenuId === org.id ? null : org.id)}
+                                className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium transition-all hover:brightness-110 active:scale-95
+                                   ${org.status === 'active' ? 'text-emerald-400 bg-emerald-400/10 hover:bg-emerald-400/20' : 'text-red-400 bg-red-400/10 hover:bg-red-400/20'}`}
+                            >
+                               <span className={`w-1.5 h-1.5 rounded-full ${org.status === 'active' ? 'bg-emerald-400' : 'bg-red-400'}`}></span>
+                               {org.status}
+                               <ChevronDown size={10} className="ml-1 opacity-50" />
+                            </button>
+
+                            {/* Dropdown */}
+                            {openStatusMenuId === org.id && (
+                                <>
+                                <div className="fixed inset-0 z-10" onClick={() => setOpenStatusMenuId(null)}></div>
+                                <div className="absolute top-full left-0 mt-2 w-32 bg-zinc-950 border border-zinc-800 rounded-lg shadow-xl z-20 overflow-hidden py-1 animate-in fade-in zoom-in-95 duration-200">
+                                    <button
+                                        onClick={() => handleStatusUpdate(org, 'active')}
+                                        className="w-full text-left px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-900 hover:text-white flex items-center gap-2"
+                                    >
+                                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-400"></div>
+                                        Active
+                                    </button>
+                                    <button
+                                        onClick={() => handleStatusUpdate(org, 'suspended')}
+                                        className="w-full text-left px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-900 hover:text-white flex items-center gap-2"
+                                    >
+                                        <div className="w-1.5 h-1.5 rounded-full bg-red-400"></div>
+                                        Suspended
+                                    </button>
+                                </div>
+                                </>
+                            )}
+                        </div>
                       </td>
-                      <td className="px-6 py-4 text-right">
+                      <td className="pl-6 pr-12 py-6 align-middle text-right">
                         <div className="flex items-center justify-end gap-2">
                            {/* COPY LINK BUTTON */}
                            <button 
                             onClick={() => copyOrgLink(org)}
-                            className={`p-2 rounded-lg transition-colors border ${
+                            className={`h-9 w-9 flex items-center justify-center rounded-lg transition-colors border ${
                               copiedOrgId === org.id 
                               ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' 
                               : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white border-zinc-700'
                             }`}
                             title="Copy Magic Login Link"
                           >
-                            {copiedOrgId === org.id ? <Check size={16} /> : <Link size={16} />}
+                            {copiedOrgId === org.id ? <Check size={16} /> : <Link size={16} className="group-hover/link:rotate-12 transition-transform" />}
                           </button>
 
                           {/* ADD CREDIT BUTTON */}
                           <button 
-                            onClick={() => setSelectedOrgForCredit(org)}
-                            className="flex items-center gap-2 px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white text-xs font-medium rounded-lg transition-colors border border-zinc-700"
+                            onClick={() => openCreditModal(org)}
+                            className="h-9 group/credit flex items-center gap-2 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white text-xs font-medium rounded-lg transition-colors border border-zinc-700 whitespace-nowrap"
                             title="Add Credits"
                           >
-                            <CreditCard size={14} />
+                            <CreditCard size={14} className="group-hover/credit:scale-110 transition-transform" />
                             Add Credit
                           </button>
 
-                          {/* MANAGE BUTTON (TEAL) */}
+                          {/* MANAGE BUTTON (ORANGE) */}
                           <button 
                             onClick={() => onSelectOrg(org)}
-                            className="flex items-center gap-2 px-3 py-2 bg-vapi-accent hover:bg-teal-300 text-black text-xs font-bold rounded-lg transition-colors"
+                            className="h-9 group/manage flex items-center gap-2 px-4 bg-vapi-accent hover:bg-orange-500 text-black text-xs font-bold rounded-lg transition-colors shadow-lg shadow-orange-500/10 whitespace-nowrap"
                           >
-                            Manage <ArrowRight size={14} />
+                            Manage <ArrowRight size={14} className="group-hover/manage:translate-x-1 transition-transform" />
                           </button>
                           
                           {/* DELETE BUTTON */}
-                          <div className="w-px h-6 bg-zinc-800 mx-1"></div>
+                          <div className="h-6 w-px bg-zinc-800 mx-1"></div>
                           <button
-                            onClick={() => handleDeleteClick(org)}
-                            className="p-2 text-zinc-500 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors"
+                            onClick={() => openDeleteOrgModal(org)}
+                            className="h-9 w-9 flex items-center justify-center group/delete text-zinc-500 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors"
                             title="Delete Organization"
                           >
-                            <Trash2 size={16} />
+                            <Trash2 size={16} className="group-hover/delete:rotate-12 transition-transform" />
                           </button>
                         </div>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
-            </div>
             
             {/* Pagination Controls */}
             {totalPages > 1 && (
@@ -450,9 +732,13 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
       </div>
 
       {/* Delete Organization Modal */}
-      {orgToDelete && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
-          <div className="bg-vapi-card border border-vapi-border rounded-xl w-full max-w-sm shadow-2xl p-6 border-red-500/20 animate-scale-up">
+      <Modal 
+        isOpen={isDeleteOrgModalOpen} 
+        onClose={closeDeleteOrgModal} 
+        onClosed={() => setOrgToDelete(null)}
+        className="max-w-sm"
+      >
+        <div className="bg-vapi-card border border-vapi-border rounded-xl shadow-2xl p-6 border-red-500/20">
             <div className="flex items-center gap-3 mb-4 text-white">
                <div className="p-3 bg-red-500/10 rounded-full text-red-500">
                   <AlertTriangle size={24} />
@@ -464,140 +750,154 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
                This action is permanent. All assistants, logs, and data for this organization will be lost.
             </p>
             
-            <div className="mb-6 space-y-2">
-               <label className="text-xs text-zinc-500 font-medium">
-                  Type <span className="text-white font-mono select-all bg-zinc-900 px-1 py-0.5 rounded">{orgToDelete.name}</span> to confirm:
-               </label>
-               <input 
-                  type="text"
-                  value={deleteConfirmation}
-                  onChange={(e) => setDeleteConfirmation(e.target.value)}
-                  placeholder={orgToDelete.name}
-                  className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-red-500"
-                  autoFocus
-               />
-            </div>
+            {orgToDelete && (
+                <div className="mb-6 space-y-2">
+                <label className="text-xs text-zinc-500 font-medium">
+                    Type <span className="text-white font-mono select-all bg-zinc-900 px-1 py-0.5 rounded">{orgToDelete.name}</span> to confirm:
+                </label>
+                <input 
+                    type="text"
+                    value={deleteConfirmation}
+                    onChange={(e) => setDeleteConfirmation(e.target.value)}
+                    placeholder={orgToDelete.name}
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-red-500"
+                    autoFocus
+                />
+                </div>
+            )}
 
             <div className="flex justify-end gap-3">
                <button 
-                  onClick={() => { setOrgToDelete(null); setDeleteConfirmation(''); }}
+                  onClick={closeDeleteOrgModal}
                   className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg font-medium transition-colors"
                >
                   Cancel
                </button>
                <button 
                   onClick={confirmDeleteOrg}
-                  disabled={deleteConfirmation !== orgToDelete.name || isDeleting}
+                  disabled={!orgToDelete || deleteConfirmation !== orgToDelete.name || isDeleting}
                   className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg font-bold transition-colors shadow-lg shadow-red-900/20 disabled:opacity-50 disabled:cursor-not-allowed"
                >
                   {isDeleting ? 'Deleting...' : 'Delete'}
                </button>
             </div>
-          </div>
         </div>
-      )}
+      </Modal>
 
       {/* Edit Organization Modal */}
-      {editingOrg && (
-         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-fade-in">
-           <div className="bg-vapi-card border border-vapi-border rounded-xl w-full max-w-sm shadow-2xl overflow-hidden animate-scale-up">
+      <Modal 
+        isOpen={isEditOrgModalOpen} 
+        onClose={closeEditOrgModal} 
+        onClosed={() => setEditingOrg(null)}
+        className="max-w-sm overflow-visible"
+      >
+           <div className="bg-vapi-card border border-vapi-border rounded-xl shadow-2xl">
               <div className="flex items-center justify-between p-4 border-b border-vapi-border bg-zinc-900/50">
                   <h3 className="text-lg font-bold text-white">Edit Organization</h3>
-                  <button onClick={() => setEditingOrg(null)} className="text-zinc-500 hover:text-white">
+                  <button onClick={closeEditOrgModal} className="text-zinc-500 hover:text-white">
                       <X size={20} />
                   </button>
               </div>
-              <form onSubmit={handleUpdateRole} className="p-6 space-y-4">
-                  <div>
-                      <label className="block text-sm font-medium text-zinc-400 mb-2">Organization</label>
-                      <input type="text" value={editingOrg.name} disabled className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-500 cursor-not-allowed"/>
-                  </div>
-                   <div>
-                      <label className="block text-sm font-medium text-zinc-400 mb-2">Plan</label>
-                      <select 
-                        value={editingOrg.plan}
-                        onChange={(e) => setEditingOrg({...editingOrg, plan: e.target.value as any})}
-                        className="w-full bg-black border border-zinc-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-vapi-accent"
-                      >
-                          <option value="trial">Trial</option>
-                          <option value="pro">Pro</option>
-                          <option value="enterprise">Enterprise</option>
-                      </select>
-                  </div>
-                  <div className="pt-2">
-                      <button type="submit" className="w-full bg-vapi-accent hover:bg-teal-300 text-black font-bold py-2 rounded-lg transition-colors">
-                          Save Changes
-                      </button>
-                  </div>
-              </form>
+              {editingOrg && (
+                <form onSubmit={handleUpdateRole} className="p-6 space-y-4">
+                    <div>
+                        <label className="block text-sm font-medium text-zinc-400 mb-2">Organization</label>
+                        <input type="text" value={editingOrg.name} disabled className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-500 cursor-not-allowed"/>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-zinc-400 mb-2">Plan</label>
+                        <CustomSelect
+                            value={editingOrg.plan}
+                            onChange={(val) => setEditingOrg({...editingOrg, plan: val as any})}
+                            options={[
+                                { value: 'trial', label: 'Trial' },
+                                { value: 'pro', label: 'Pro' },
+                                { value: 'enterprise', label: 'Enterprise' }
+                            ]}
+                        />
+                    </div>
+                    <div className="pt-2">
+                        <button type="submit" className="w-full bg-vapi-accent hover:bg-orange-500 text-black font-bold py-2 rounded-lg transition-colors">
+                            Save Changes
+                        </button>
+                    </div>
+                </form>
+              )}
            </div>
-         </div>
-      )}
+      </Modal>
 
       {/* Add Credit Modal */}
-      {selectedOrgForCredit && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-fade-in">
-          <div className="bg-vapi-card border border-vapi-border rounded-xl w-full max-w-md shadow-2xl overflow-hidden animate-scale-up">
+      <Modal 
+        isOpen={isCreditModalOpen} 
+        onClose={closeCreditModal} 
+        onClosed={() => setSelectedOrgForCredit(null)}
+        className="max-w-md"
+      >
+          <div className="bg-vapi-card border border-vapi-border rounded-xl shadow-2xl overflow-hidden">
             <div className="flex items-center justify-between p-4 border-b border-vapi-border bg-zinc-900/50">
               <h3 className="text-lg font-bold text-white">Add Credits</h3>
               <button 
-                onClick={() => setSelectedOrgForCredit(null)}
+                onClick={closeCreditModal}
                 className="text-zinc-500 hover:text-white transition-colors"
               >
                 <X size={20} />
               </button>
             </div>
             
-            <form onSubmit={handleAddCredit} className="p-6 space-y-6">
-              <div>
-                <label className="block text-sm font-medium text-zinc-400 mb-2">Organization</label>
-                <div className="p-3 bg-zinc-900 border border-zinc-700 rounded-lg text-white font-medium">
-                  {selectedOrgForCredit.name}
+            {selectedOrgForCredit && (
+                <form onSubmit={handleAddCredit} className="p-6 space-y-6">
+                <div>
+                    <label className="block text-sm font-medium text-zinc-400 mb-2">Organization</label>
+                    <div className="p-3 bg-zinc-900 border border-zinc-700 rounded-lg text-white font-medium">
+                    {selectedOrgForCredit.name}
+                    </div>
                 </div>
-              </div>
 
-              <div>
-                <label className="block text-sm font-medium text-zinc-400 mb-2">Amount ($)</label>
-                <div className="relative">
-                  <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" size={16} />
-                  <input 
-                    type="number"
-                    step="0.01"
-                    min="1"
-                    value={creditAmount}
-                    onChange={(e) => setCreditAmount(e.target.value)}
-                    className="w-full bg-black border border-zinc-700 rounded-lg pl-9 pr-4 py-3 text-white focus:outline-none focus:border-vapi-accent transition-colors"
-                    placeholder="Enter amount (e.g. 50.00)"
-                    autoFocus
-                  />
+                <div>
+                    <label className="block text-sm font-medium text-zinc-400 mb-2">Amount ($)</label>
+                    <div className="relative">
+                    <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" size={16} />
+                    <input 
+                        type="number"
+                        step="0.01"
+                        min="1"
+                        value={creditAmount}
+                        onChange={(e) => setCreditAmount(e.target.value)}
+                        className="w-full bg-black border border-zinc-700 rounded-lg pl-9 pr-4 py-3 text-white focus:outline-none focus:border-vapi-accent transition-colors"
+                        placeholder="Enter amount (e.g. 50.00)"
+                        autoFocus
+                    />
+                    </div>
                 </div>
-              </div>
 
-              <div className="flex items-center gap-3 pt-2">
-                <button 
-                  type="button"
-                  onClick={() => setSelectedOrgForCredit(null)}
-                  className="flex-1 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg font-medium transition-colors"
-                >
-                  Cancel
-                </button>
-                <button 
-                  type="submit"
-                  disabled={!creditAmount}
-                  className="flex-1 px-4 py-2.5 bg-vapi-accent hover:bg-teal-300 text-black rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Add Credits
-                </button>
-              </div>
-            </form>
+                <div className="flex items-center gap-3 pt-2">
+                    <button 
+                    type="button"
+                    onClick={closeCreditModal}
+                    className="flex-1 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg font-medium transition-colors"
+                    >
+                    Cancel
+                    </button>
+                    <button 
+                    type="submit"
+                    disabled={!creditAmount}
+                    className="flex-1 px-4 py-2.5 bg-vapi-accent hover:bg-orange-500 text-black rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                    Add Credits
+                    </button>
+                </div>
+                </form>
+            )}
           </div>
-        </div>
-      )}
+      </Modal>
 
       {/* Add Org Modal */}
-      {showAddModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-fade-in">
-          <div className="bg-vapi-card border border-vapi-border rounded-xl w-full max-w-md shadow-2xl overflow-hidden animate-scale-up">
+      <Modal
+        isOpen={showAddModal}
+        onClose={() => setShowAddModal(false)}
+        className="max-w-md overflow-visible"
+      >
+          <div className="bg-vapi-card border border-vapi-border rounded-xl shadow-2xl">
             <div className="flex items-center justify-between p-4 border-b border-vapi-border bg-zinc-900/50">
               <h3 className="text-lg font-bold text-white">New Organization</h3>
               <button 
@@ -652,15 +952,15 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
               <div className="grid grid-cols-1 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-zinc-400 mb-2">Plan</label>
-                    <select
+                    <CustomSelect 
                         value={newOrgPlan}
-                        onChange={(e) => setNewOrgPlan(e.target.value as any)}
-                        className="w-full bg-black border border-zinc-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-vapi-accent transition-colors"
-                    >
-                        <option value="trial">Trial</option>
-                        <option value="pro">Pro</option>
-                        <option value="enterprise">Enterprise</option>
-                    </select>
+                        onChange={(val) => setNewOrgPlan(val as any)}
+                        options={[
+                            { value: 'trial', label: 'Trial' },
+                            { value: 'pro', label: 'Pro' },
+                            { value: 'enterprise', label: 'Enterprise' }
+                        ]}
+                    />
                   </div>
               </div>
 
@@ -675,20 +975,22 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
                 <button 
                   type="submit"
                   disabled={!newOrgName.trim() || !newOrgEmail.trim() || !newOrgPassword.trim() || isCreating}
-                  className="flex-1 px-4 py-2.5 bg-vapi-accent hover:bg-teal-300 text-black rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  className="flex-1 px-4 py-2.5 bg-vapi-accent hover:bg-orange-500 text-black rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                 >
                   {isCreating ? 'Saving...' : 'Create'}
                 </button>
               </div>
             </form>
           </div>
-        </div>
-      )}
+      </Modal>
 
       {/* Bots List Modal */}
-      {showBotsModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-fade-in">
-          <div className="bg-vapi-card border border-vapi-border rounded-xl w-full max-w-4xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+      <Modal
+        isOpen={showBotsModal}
+        onClose={() => setShowBotsModal(false)}
+        className="max-w-4xl"
+      >
+          <div className="bg-vapi-card border border-vapi-border rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
             <div className="flex items-center justify-between p-4 border-b border-vapi-border bg-zinc-900/50">
               <div className="flex items-center gap-3">
                   <div className="p-2 bg-pink-500/10 rounded-lg text-pink-500">
@@ -743,13 +1045,22 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
                                     </span>
                                 </td>
                                 <td className="px-6 py-3 text-right">
-                                    <button 
-                                        onClick={() => setBotToTransfer(bot)}
-                                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-indigo-500/10 text-zinc-400 hover:text-indigo-400 text-xs font-medium rounded-lg transition-colors border border-zinc-700 hover:border-indigo-500/30"
-                                    >
-                                        <ArrowRightLeft size={12} />
-                                        Transfer
-                                    </button>
+                                    <div className="flex items-center justify-end gap-2">
+                                        <button 
+                                            onClick={() => openAssistantEditor(bot)}
+                                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-white/10 text-zinc-400 hover:text-white text-xs font-medium rounded-lg transition-colors border border-zinc-700 hover:border-white/20"
+                                        >
+                                            <Edit size={12} />
+                                            Edit
+                                        </button>
+                                        <button 
+                                            onClick={() => openTransferModal(bot)}
+                                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-indigo-500/10 text-zinc-400 hover:text-indigo-400 text-xs font-medium rounded-lg transition-colors border border-zinc-700 hover:border-indigo-500/30"
+                                        >
+                                            <ArrowRightLeft size={12} />
+                                            Transfer
+                                        </button>
+                                    </div>
                                 </td>
                             </tr>
                         ))}
@@ -764,13 +1075,43 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
                </table>
             </div>
           </div>
-        </div>
-      )}
+      </Modal>
+
+      {/* Assistant Editor Overlay */}
+      <Modal 
+        isOpen={isAssistantEditorOpen} 
+        onClose={closeAssistantEditor}
+        onClosed={() => {
+            setWorkingAssistant(null);
+            setAssistantToEdit(null);
+        }}
+        fullScreen={true}
+      >
+        {workingAssistant && (
+            <AssistantEditor 
+                assistant={workingAssistant}
+                onChange={handleAssistantChange}
+                onBack={closeAssistantEditor}
+                onSave={saveAssistantChanges}
+                onDelete={deleteAssistant}
+                hasChanges={hasUnsavedChanges}
+                isSaving={isSavingAssistant}
+                orgName={getOrgName(workingAssistant.orgId)}
+            />
+        )}
+      </Modal>
 
       {/* Transfer Bot Modal */}
-      {botToTransfer && (
-        <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
-           <div className="bg-vapi-card border border-vapi-border rounded-xl w-full max-w-sm shadow-2xl p-6">
+      <Modal
+        isOpen={isTransferModalOpen}
+        onClose={closeTransferModal}
+        onClosed={() => {
+            setBotToTransfer(null);
+            setTargetOrgId('');
+        }}
+        className="max-w-sm overflow-visible"
+      >
+           <div className="bg-vapi-card border border-vapi-border rounded-xl shadow-2xl p-6">
               <div className="flex items-center gap-3 mb-4 text-white">
                 <div className="p-3 bg-indigo-500/10 rounded-full text-indigo-400">
                    <ArrowRightLeft size={24} />
@@ -778,33 +1119,28 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
                 <h3 className="text-lg font-bold">Transfer Assistant</h3>
               </div>
               
-              <div className="mb-6">
+              {botToTransfer && (
+                <div className="mb-6">
                   <p className="text-zinc-400 text-sm mb-4">
                     Move <span className="text-white font-medium">{botToTransfer.name}</span> from <span className="text-zinc-300">{getOrgName(botToTransfer.orgId)}</span>?
                   </p>
                   
                   <label className="block text-xs font-medium text-zinc-500 mb-2 uppercase tracking-wide">Destination Organization</label>
-                  <div className="relative">
-                      <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" size={16} />
-                      <select
-                          value={targetOrgId}
-                          onChange={(e) => setTargetOrgId(e.target.value)}
-                          className="w-full bg-zinc-950 border border-zinc-700 rounded-lg pl-10 pr-4 py-3 text-sm text-white focus:outline-none focus:border-vapi-accent appearance-none cursor-pointer"
-                      >
-                          <option value="">Select an organization...</option>
-                          {organizations
-                              .filter(org => org.id !== botToTransfer.orgId) // Exclude current org
-                              .map(org => (
-                                  <option key={org.id} value={org.id}>{org.name}</option>
-                              ))
-                          }
-                      </select>
-                  </div>
-              </div>
+                  <CustomSelect
+                      value={targetOrgId}
+                      onChange={setTargetOrgId}
+                      options={organizations
+                          .filter(org => org.id !== botToTransfer.orgId)
+                          .map(org => ({ value: org.id, label: org.name }))
+                      }
+                      placeholder="Select an organization..."
+                  />
+                </div>
+              )}
 
               <div className="flex justify-end gap-3">
                 <button 
-                  onClick={() => { setBotToTransfer(null); setTargetOrgId(''); }}
+                  onClick={closeTransferModal}
                   className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg font-medium transition-colors"
                 >
                   Cancel
@@ -812,15 +1148,14 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
                 <button 
                   onClick={handleTransferSubmit}
                   disabled={!targetOrgId || isTransferring}
-                  className="px-4 py-2 bg-vapi-accent hover:bg-teal-300 text-black rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                  className="px-4 py-2 bg-vapi-accent hover:bg-orange-500 text-black rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                 >
                   {isTransferring ? <Loader2 size={16} className="animate-spin" /> : null}
                   Confirm Transfer
                 </button>
               </div>
            </div>
-        </div>
-      )}
+      </Modal>
 
     </div>
   );
@@ -828,13 +1163,13 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
 
 const StatCard: React.FC<{ title: string; value: string; icon: React.ReactNode }> = ({ title, value, icon }) => {
   return (
-    <div className="bg-vapi-card border border-vapi-border rounded-xl p-5 flex flex-col justify-between hover:border-zinc-700 transition-colors shadow-sm">
+    <div className="bg-zinc-900/30 border border-white/5 rounded-2xl p-6 flex flex-col justify-between hover:bg-zinc-900/50 hover:border-white/10 transition-all duration-300 backdrop-blur-sm group">
       <div className="flex items-start justify-between">
         <div>
-          <p className="text-zinc-400 text-sm font-medium mb-1">{title}</p>
-          <h2 className="text-2xl font-bold text-white">{value}</h2>
+          <p className="text-zinc-500 text-xs font-semibold uppercase tracking-wider mb-1">{title}</p>
+          <h2 className="text-3xl font-bold text-white tracking-tight">{value}</h2>
         </div>
-        <div className="p-2 bg-zinc-900 rounded-lg border border-zinc-800">
+        <div className="p-3 bg-white/5 rounded-xl border border-white/5 group-hover:scale-110 transition-transform duration-300">
           {icon}
         </div>
       </div>
