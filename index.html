@@ -92,15 +92,18 @@
       window.process.env = window.process.env || {};
       window.process.env.NODE_ENV = 'development';
       
-      // Supabase Configuration injected from user request
-      window.process.env.SUPABASE_URL = 'https://tlglequivxzlekjrbjvq.supabase.co';
-      window.process.env.SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRsZ2xlcXVpdnh6bGVranJianZxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjczMjQ5MDQsImV4cCI6MjA4MjkwMDkwNH0.T3NRtldqSY6dUtjNTjYsJBD3iJnKA95JYD_uxRZRIhc';
+      // Supabase Configuration
+      // Left empty to default to Local Storage configuration via the UI
+      // If you are using a bundler (Vite/Webpack), use .env files instead.
+      window.process.env.SUPABASE_URL = '';
+      window.process.env.SUPABASE_ANON_KEY = '';
     </script>
 
     <!-- STABLE IMPORT MAP -->
     <!-- We use ?dev and deps=react@^19.2.3 to ensure all libraries share the EXACT same React instance -->
-   
-</head>
+    
+    <link rel="stylesheet" href="/index.css" />
+  </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/index.tsx"></script>
