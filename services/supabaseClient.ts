@@ -5,6 +5,10 @@ import { Organization, FileItem, ToolItem } from '../types';
 const STORE_URL = 'vapi_sb_url';
 const STORE_KEY = 'vapi_sb_key';
 
+// Hardcoded Fallbacks provided by user
+const PROVIDED_URL = 'https://tlglequivxzlekjrbjvq.supabase.co';
+const PROVIDED_KEY = 'sb_publishable_7nq3imUdgiB8RmSvdI7ggA_mnVus3vv';
+
 class SupabaseService {
   private supabase: SupabaseClient | null = null;
   private sbUrl: string = '';
@@ -33,20 +37,28 @@ class SupabaseService {
     const localUrl = localStorage.getItem(STORE_URL);
     const localKey = localStorage.getItem(STORE_KEY);
 
-    // Prioritize: Env Vars > Window Injection > Local Storage
-    const url = (viteUrl || procUrl || winUrl || localUrl || '').trim();
-    const key = (viteKey || procKey || winKey || localKey || '').trim();
+    // Resolution Logic: 
+    // 1. LocalStorage (User overrides)
+    // 2. VITE_ env vars (if set correctly)
+    // 3. process.env (if set correctly)
+    // 4. Fallback to PROVIDED constants (Hardcoded fix)
+    
+    let url = (localUrl || viteUrl || procUrl || winUrl || PROVIDED_URL).trim();
+    let key = (localKey || viteKey || procKey || winKey || PROVIDED_KEY).trim();
+
+    // Fix: If VITE_ var exists but is the default placeholder, ignore it and use provided
+    if (url.includes('your-project-id') || url.includes('placeholder')) {
+        url = PROVIDED_URL;
+    }
+    if (key.includes('placeholder')) {
+        key = PROVIDED_KEY;
+    }
 
     // Debugging logs for production issues
     if (!url || !key) {
         console.groupCollapsed("[SupabaseService] Connection Config Missing");
-        console.log("Checking VITE_SUPABASE_URL:", viteUrl ? "Found" : "Missing");
-        console.log("Checking process.env.SUPABASE_URL:", procUrl ? "Found" : "Missing");
-        console.log("Checking LocalStorage:", localUrl ? "Found" : "Missing");
-        console.warn("If deploying to Vercel, ensure variables start with 'VITE_' (e.g. VITE_SUPABASE_URL)");
+        console.log("Using provided fallbacks failed.");
         console.groupEnd();
-    } else {
-        // console.log("[SupabaseService] Configured with:", url);
     }
 
     if (url && key) {
@@ -60,6 +72,7 @@ class SupabaseService {
             this.sbUrl = url;
             this.sbKey = key;
             this.supabase = createClient(url, key);
+            console.log("[SupabaseService] Initialized with URL:", url);
         } catch (e) {
             console.error("Failed to initialize Supabase client", e);
             this.supabase = null;
@@ -85,10 +98,12 @@ class SupabaseService {
       this.supabase = null;
       this.sbUrl = '';
       this.sbKey = '';
+      // Re-init with defaults if available
+      this.initClient();
   }
 
   private checkClient() {
-      if (!this.supabase) throw new Error("Supabase not configured. Click the gear icon to set up your connection.");
+      if (!this.supabase) throw new Error("Supabase not configured. Please check your connection settings.");
   }
 
   // --- Auth Methods ---

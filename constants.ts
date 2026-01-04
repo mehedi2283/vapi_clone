@@ -1,7 +1,15 @@
 import { Assistant, CallLog, MetricData, Organization, FileItem, ToolItem } from './types';
 
-// Vapi Private Key
-export const VAPI_PRIVATE_KEY = '4535e480-b370-41d2-b275-bb85d4870aa4'; 
+// SECURITY NOTE: 
+// Keys are now read from Environment Variables to prevent accidental exposure in source control.
+// In Vercel, set VITE_VAPI_PRIVATE_KEY.
+// If missing, the UI will prompt the user to enter it.
+// @ts-ignore
+export const VAPI_PRIVATE_KEY = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_VAPI_PRIVATE_KEY) 
+  // @ts-ignore
+  || (typeof process !== 'undefined' && process.env?.VAPI_PRIVATE_KEY) 
+  || ''; 
+
 export const NIYA_ORG_ID = 'org_niya';
 
 // Initialize with empty/zero data for production ready state
