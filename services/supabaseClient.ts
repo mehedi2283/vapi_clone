@@ -15,15 +15,39 @@ class SupabaseService {
   }
 
   private initClient() {
-    // Try environment variables first (if built), then local storage (runtime)
-    const envUrl = process.env.SUPABASE_URL;
-    const envKey = process.env.SUPABASE_ANON_KEY;
+    // 1. Try Vite/Modern Bundler Environment Variables
+    // @ts-ignore
+    const viteUrl = typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env.VITE_SUPABASE_URL : undefined;
+    // @ts-ignore
+    const viteKey = typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env.VITE_SUPABASE_ANON_KEY : undefined;
+
+    // 2. Try Standard Process Env (Webpack/Node) or Polyfill from index.html
+    const procUrl = typeof process !== 'undefined' && process.env ? process.env.SUPABASE_URL : undefined;
+    const procKey = typeof process !== 'undefined' && process.env ? process.env.SUPABASE_ANON_KEY : undefined;
     
+    // 3. Try Window Object (Legacy/Direct Injection)
+    const winUrl = (window as any).process?.env?.SUPABASE_URL;
+    const winKey = (window as any).process?.env?.SUPABASE_ANON_KEY;
+
+    // 4. Try Local Storage (Runtime Configuration)
     const localUrl = localStorage.getItem(STORE_URL);
     const localKey = localStorage.getItem(STORE_KEY);
 
-    const url = (envUrl || localUrl || '').trim();
-    const key = (envKey || localKey || '').trim();
+    // Prioritize: Env Vars > Window Injection > Local Storage
+    const url = (viteUrl || procUrl || winUrl || localUrl || '').trim();
+    const key = (viteKey || procKey || winKey || localKey || '').trim();
+
+    // Debugging logs for production issues
+    if (!url || !key) {
+        console.groupCollapsed("[SupabaseService] Connection Config Missing");
+        console.log("Checking VITE_SUPABASE_URL:", viteUrl ? "Found" : "Missing");
+        console.log("Checking process.env.SUPABASE_URL:", procUrl ? "Found" : "Missing");
+        console.log("Checking LocalStorage:", localUrl ? "Found" : "Missing");
+        console.warn("If deploying to Vercel, ensure variables start with 'VITE_' (e.g. VITE_SUPABASE_URL)");
+        console.groupEnd();
+    } else {
+        // console.log("[SupabaseService] Configured with:", url);
+    }
 
     if (url && key) {
         // Basic validation to prevent crash
