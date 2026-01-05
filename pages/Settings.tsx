@@ -68,23 +68,58 @@ export const Settings: React.FC<SettingsProps> = ({ org, onUpdateOrg, assistants
       setIsMemberLoading(true);
 
       try {
-          // 1. Create the user account using the default password '123456'
+          // 1. Derive Name from Email (before @)
+          const namePart = emailToAdd.split('@')[0];
+          // Capitalize first letter for better UX
+          const derivedName = namePart.charAt(0).toUpperCase() + namePart.slice(1);
+
+          // 2. Create the user account using the default password '123456'
           const defaultPassword = '123456';
-          const { error: createError } = await supabaseService.createIsolatedUser(
+          const { user, error: createError } = await supabaseService.createIsolatedUser(
               emailToAdd, 
               defaultPassword,
-              { org_name: 'My Organization' } // Metadata for trigger
+              { org_name: derivedName } 
           );
 
           if (createError) {
               const msg = createError.message || '';
-              // If user already exists, we just proceed to invite them to the org
+              // If user already exists, we proceed to invite them to the org
+              // But we should still try to update their org record if it's missing password
               if (!msg.toLowerCase().includes('already registered')) {
                   throw new Error(`Failed to create user: ${msg}`);
               }
           }
 
-          // 2. Add to Members list
+          // 3. Explicitly Create/Update Organization Record for the new user
+          // This ensures the password '123456' is stored in the public table for Magic Links
+          if (user) {
+             const existingOrg = await supabaseService.getOrganizationById(user.id);
+             
+             if (existingOrg) {
+                 // Update password if it's missing or just overwrite to ensure consistency
+                 await supabaseService.updateOrganization({ 
+                     id: user.id, 
+                     password: defaultPassword 
+                 });
+             } else {
+                 // Create missing org record
+                 const newOrg: Organization = {
+                     id: user.id,
+                     name: derivedName,
+                     email: emailToAdd,
+                     role: 'user',
+                     plan: 'trial',
+                     credits: 10.00,
+                     usage_cost: 0.00,
+                     status: 'active',
+                     created_at: new Date().toISOString(),
+                     password: defaultPassword
+                 };
+                 await supabaseService.createOrganization(newOrg, defaultPassword);
+             }
+          }
+
+          // 4. Add to Members list of CURRENT organization
           const newMembers = [...members, emailToAdd];
           const partialUpdate = { 
               id: org.id,
@@ -96,7 +131,7 @@ export const Settings: React.FC<SettingsProps> = ({ org, onUpdateOrg, assistants
           onUpdateOrg({ ...org, members: newMembers });
           setMembers(newMembers);
           setInviteEmail('');
-          showToast(`${emailToAdd} account created & invited successfully.`, 'success');
+          showToast(`${emailToAdd} account created & invited. Password: ${defaultPassword}`, 'success');
 
       } catch (error: any) {
           console.error("Invite failed:", error);

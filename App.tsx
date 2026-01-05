@@ -38,9 +38,14 @@ export default function App() {
         const params = new URLSearchParams(window.location.search);
         const token = params.get('token');
         
-        // Only process if we have a token and are NOT already logged in
-        if (token && !session?.user) {
+        if (token) {
             setIsMagicLoggingIn(true);
+            
+            // Force logout if already logged in to allow switching accounts via link
+            if (supabaseService.isConfigured()) {
+                 await supabaseService.signOut();
+            }
+
             const data = parseSecureToken(token);
             
             if (data && data.em && data.pw) {
@@ -51,7 +56,7 @@ export default function App() {
                     window.history.replaceState({}, document.title, window.location.pathname);
                 } catch (err) {
                     console.error("Magic login failed", err);
-                    // Just let standard auth flow take over if this fails
+                    // Standard flow will pick up if this fails
                 } finally {
                     setIsMagicLoggingIn(false);
                 }
@@ -62,7 +67,7 @@ export default function App() {
         }
     };
     checkMagicLink();
-  }, [session?.user]); // Re-check if session changes (though primarily runs on mount)
+  }, []); // Run once on mount
 
   useEffect(() => {
     // Initial Check
