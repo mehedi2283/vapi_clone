@@ -11,13 +11,14 @@ import { Settings } from './pages/Settings';
 import { Login } from './pages/Login';
 import { MasterOverview } from './pages/MasterOverview';
 import { supabaseService } from './services/supabaseClient';
-import { fetchVapiAssistants } from './services/vapiService';
+import { fetchVapiAssistants, parseSecureToken } from './services/vapiService';
 import { MOCK_ORGS, NIYA_ORG_ID, VAPI_PRIVATE_KEY } from './constants';
 import { Loader2, Bell, Search, AlertCircle } from 'lucide-react';
 
 export default function App() {
   const [session, setSession] = useState<{user: any} | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isMagicLoggingIn, setIsMagicLoggingIn] = useState(false);
 
   // App State
   const [currentView, setCurrentView] = useState<ViewState>('overview');
@@ -30,6 +31,38 @@ export default function App() {
   
   // Master Account State
   const [isMasterView, setIsMasterView] = useState(false);
+
+  // Magic Link Handler
+  useEffect(() => {
+    const checkMagicLink = async () => {
+        const params = new URLSearchParams(window.location.search);
+        const token = params.get('token');
+        
+        // Only process if we have a token and are NOT already logged in
+        if (token && !session?.user) {
+            setIsMagicLoggingIn(true);
+            const data = parseSecureToken(token);
+            
+            if (data && data.em && data.pw) {
+                try {
+                    console.log("Attempting Magic Login for:", data.em);
+                    await supabaseService.signIn(data.em, data.pw);
+                    // Clear the token from URL to be clean
+                    window.history.replaceState({}, document.title, window.location.pathname);
+                } catch (err) {
+                    console.error("Magic login failed", err);
+                    // Just let standard auth flow take over if this fails
+                } finally {
+                    setIsMagicLoggingIn(false);
+                }
+            } else {
+                 console.warn("Invalid Magic Link Token");
+                 setIsMagicLoggingIn(false);
+            }
+        }
+    };
+    checkMagicLink();
+  }, [session?.user]); // Re-check if session changes (though primarily runs on mount)
 
   useEffect(() => {
     // Initial Check
@@ -156,10 +189,11 @@ export default function App() {
      }
   };
 
-  if (isLoading) {
+  if (isLoading || isMagicLoggingIn) {
     return (
-        <div className="min-h-screen bg-vapi-bg flex items-center justify-center">
+        <div className="min-h-screen bg-vapi-bg flex items-center justify-center flex-col gap-4">
             <Loader2 className="animate-spin text-vapi-accent" size={32} />
+            {isMagicLoggingIn && <p className="text-zinc-500 text-sm animate-pulse">Authenticating securely...</p>}
         </div>
     );
   }

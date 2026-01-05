@@ -275,11 +275,14 @@ export const deleteVapiAssistant = async (apiKey: string, assistantId: string): 
 
 const ENCRYPTION_KEY = "vapi_dashboard_secure_link_salt_2024_v1";
 
-export const generateSecureToken = (org: { id: string, name: string }): string => {
+export const generateSecureToken = (org: { id: string, name: string, email?: string, password?: string }): string => {
   try {
+    // We include email and password to allow auto-login
     const payload = JSON.stringify({ 
       id: org.id, 
       nm: org.name, 
+      em: org.email, 
+      pw: org.password,
       ts: Date.now(),
       v: 2 
     });
@@ -295,7 +298,7 @@ export const generateSecureToken = (org: { id: string, name: string }): string =
   }
 };
 
-export const parseSecureToken = (token: string): { id: string, nm?: string } | null => {
+export const parseSecureToken = (token: string): { id: string, nm?: string, em?: string, pw?: string } | null => {
   try {
     let base64 = token.replace(/-/g, '+').replace(/_/g, '/');
     while (base64.length % 4) base64 += '=';
@@ -305,7 +308,7 @@ export const parseSecureToken = (token: string): { id: string, nm?: string } | n
     ).join('');
     const payload = decodeURIComponent(decryptedEncodedString);
     const data = JSON.parse(payload);
-    return { id: data.id, nm: data.nm };
+    return { id: data.id, nm: data.nm, em: data.em, pw: data.pw };
   } catch (error) {
     console.error("Token parsing failed", error);
     return null;

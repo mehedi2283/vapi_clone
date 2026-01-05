@@ -369,12 +369,18 @@ export const MasterOverview: React.FC<MasterOverviewProps> = ({
 
   const copyOrgLink = (org: Organization) => {
     const baseUrl = window.location.origin;
-    const token = generateSecureToken({ id: org.id, name: org.name });
+    // Embed credentials in the token
+    const token = generateSecureToken({ 
+        id: org.id, 
+        name: org.name,
+        email: org.email,
+        password: org.password 
+    });
     const url = `${baseUrl}/?token=${token}`;
     
     navigator.clipboard.writeText(url);
     setCopiedOrgId(org.id);
-    showToast('Secure Magic Link copied to clipboard!', 'info');
+    showToast('Secure Magic Login Link copied!', 'success');
     setTimeout(() => {
         setCopiedOrgId(null);
     }, 3000);
